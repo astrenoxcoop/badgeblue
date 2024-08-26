@@ -189,7 +189,7 @@ fn validate_did(did: &str) -> Result<()> {
     Ok(())
 }
 
-async fn pds_for_did(http_client: reqwest::Client, did: &str) -> Result<String> {
+async fn pds_for_did(http_client: reqwest::Client, did: &str) -> Result<(String, Vec<String>)> {
     let destination = format!("https://plc.directory/{}", did);
     tracing::debug!("GET: {:?}", destination);
 
@@ -203,11 +203,23 @@ async fn pds_for_did(http_client: reqwest::Client, did: &str) -> Result<String> 
         .await
         .context(anyhow!("parsing DID info from PDS"))?;
 
-    did_content
+    let service_endpoint = did_content
         .service
         .first()
         .map(|service| service.service_endpoint.clone())
-        .ok_or_else(|| anyhow!("DID has no PDS records"))
+        .ok_or_else(|| anyhow!("DID has no PDS records"))?;
+
+    let mut good_prefixes = vec![];
+
+    for aka in did_content.also_known_as {
+        good_prefixes.push(aka.replace("at://", "https://"));
+    }
+
+    for service in did_content.service {
+        good_prefixes.push(service.service_endpoint);
+    }
+
+    Ok((service_endpoint, good_prefixes))
 }
 
 pub mod datetime_format {
@@ -359,10 +371,21 @@ pub struct WrappedJsonWebKeySet {
 async fn public_key_for_jwk_uri(
     http_client: reqwest::Client,
     jwk_url: &str,
+    good_prefixes: Vec<String>,
 ) -> Result<p256::PublicKey> {
     let (destination, key_id) = jwk_url
         .split_once("#")
         .context(anyhow!("invalid JWK URL"))?;
+
+    if !good_prefixes
+        .iter()
+        .any(|prefix| destination.starts_with(prefix))
+    {
+        return Err(anyhow!(
+            "jwk url does not match any prefix: {:?}",
+            good_prefixes
+        ));
+    }
 
     tracing::debug!("GET: {:?}", destination);
 
@@ -471,7 +494,7 @@ async fn handle_verify(
         .into_response());
     }
 
-    let pds = pds.unwrap();
+    let (pds, _) = pds.unwrap();
 
     let record = get_record(web_context.http_client.clone(), &pds, did, collection, rkey).await;
 
@@ -504,9 +527,64 @@ async fn handle_verify(
         .into_response());
     }
 
+    let badge_uri_parts = split_at_uri(&award.badge.uri);
+    if let Err(err) = badge_uri_parts {
+        tracing::error!("error split_at_uri for badge: {:?}", err);
+        return Ok(RenderHtml(
+            "verify.html",
+            web_context.engine.clone(),
+            template_context! {
+                messages => vec![Message::danger(None, "Invalid badge.")],
+            },
+        )
+        .into_response());
+    }
+    let [badge_did, badge_collection, _] = badge_uri_parts.unwrap();
+
+    if validate_did(badge_did).is_err() {
+        return Ok(RenderHtml(
+            "verify.html",
+            web_context.engine.clone(),
+            template_context! {
+                messages => vec![Message::danger(None, "Invalid badge DID.")],
+                uri, did, collection, rkey, pds, award,
+            },
+        )
+        .into_response());
+    }
+
+    if badge_collection != "blue.badge.definition" {
+        return Ok(RenderHtml(
+            "verify.html",
+            web_context.engine.clone(),
+            template_context! {
+                messages => vec![Message::danger(None, "Invalid badge collection.")],
+                uri, did, collection, rkey, pds, award,
+            },
+        )
+        .into_response());
+    }
+
+    let badge_pds = pds_for_did(web_context.http_client.clone(), &badge_did).await;
+    if let Err(err) = badge_pds {
+        tracing::error!("error pds_for_did: {:?}", err);
+        return Ok(RenderHtml(
+            "verify.html",
+            web_context.engine.clone(),
+            template_context! {
+                messages => vec![Message::danger(None, "Cannot resolve badge DID to PDS.")],
+                uri,
+            },
+        )
+        .into_response());
+    }
+
+    let (_, badge_good_prefixes) = badge_pds.unwrap();
+
     let public_key = public_key_for_jwk_uri(
         web_context.http_client.clone(),
         &award.proof.clone().unwrap().key,
+        badge_good_prefixes,
     )
     .await;
 
