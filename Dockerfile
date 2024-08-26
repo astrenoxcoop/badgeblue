@@ -4,7 +4,7 @@ FROM rust:1-bookworm AS build
 RUN cargo install sccache --version ^0.8
 ENV RUSTC_WRAPPER=sccache SCCACHE_DIR=/sccache
 
-RUN USER=root cargo new --bin badgeblue
+RUN USER=root cargo new badgeblue
 RUN mkdir -p /app/
 WORKDIR /app/
 
@@ -33,7 +33,7 @@ RUN groupadd -g 1504 -r badgeblue && useradd -u 1505 -r -g badgeblue -d /var/lib
 ENV RUST_LOG=info
 ENV RUST_BACKTRACE=full
 
-COPY --from=build /app/badgeblue/badgeblue /var/lib/badgeblue/
+COPY --from=build /app/release/badgeblue /var/lib/badgeblue/
 
 RUN chown -R badgeblue:badgeblue /var/lib/badgeblue
 
