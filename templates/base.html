@@ -1,0 +1,71 @@
+{%- macro view_pagination(url, pagination) -%}
+{% if pagination.previous or pagination.next %}
+<nav class="pagination pt-5" role="navigation" aria-label="pagination">
+  {%- if pagination.previous -%}
+  <a href="{% autoescape false %}{{ url }}{{ pagination.previous_url }}{% endautoescape %}" class="pagination-previous"
+    rel="nofollow">Previous</a>
+  {%- else -%}
+  <a class="pagination-previous is-disabled">Previous</a>
+  {%- endif -%}
+
+  {%- if pagination.next -%}
+  <a href="{% autoescape false %}{{ url }}{{ pagination.next_url }}{% endautoescape %}" class="pagination-next"
+    rel="nofollow">Next</a>
+  {%- else -%}
+  <a class="pagination-next is-disabled">Next</a>
+  {%- endif -%}
+</nav>
+{% endif %}
+{%- endmacro -%}
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ title }}{% endblock %}</title>
+  {% if canonical_url %}
+  <link rel="canonical" href="{% autoescape false %}{{ canonical_url }}{% endautoescape %}">
+  {% endif %}
+  <link rel="stylesheet" href="https://bulma.io/vendor/fontawesome-free-6.5.2-web/css/all.min.css">
+  <link rel="stylesheet" href="/static/bulma.css">
+  {% block head %}
+  {% endblock %}
+  <meta property="og:site_name" content="Blue Badge" />
+  <meta property="og:type" content="website" />
+  {% if canonical_url %}
+  <meta property="og:url" content="{{ canonical_url }}" />
+  {% endif %}
+</head>
+<body>
+  <div class="container">
+    {% block content %}<h1>Hello, world!</h1>{% endblock %}
+    <footer class="footer content py-3 mt-6">
+      <div class="columns">
+        <div class="column">
+          &copy; 2024. All Rigths Reserved.
+          <strong>Blue Badge</strong>
+          <a href="https://bsky.app/profile/badge.blue">
+            <span class="icon">
+              <i class="fa-brands fa-bluesky"></i>
+            </span>
+          </a>
+          by Nick Gerakines
+          <a href="https://ngerakines.me/">
+            <span class="icon">
+              <i class="fas fa-globe"></i>
+            </span>
+          </a>
+          <a href="https://bsky.app/profile/ngerakines.me">
+            <span class="icon">
+              <i class="fa-brands fa-bluesky"></i>
+            </span>
+          </a>
+        </div>
+      </div>
+    </footer>
+  </div>
+</body>
+
+</html>

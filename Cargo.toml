@@ -1,0 +1,31 @@
+[package]
+name = "badgeblue"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["reload"]
+reload = ["dep:minijinja-autoreload"]
+embed = ["dep:minijinja-embed"]
+
+[build-dependencies]
+minijinja-embed = {version = "2.0.3"}
+
+[dependencies]
+anyhow = "1.0.86"
+axum = { version = "0.7.5", default-features = false, features = ["http2", "http1", "matched-path", "original-uri", "tokio", "macros", "query"] }
+axum-template = { version = "2.4.0", features = ["minijinja", "minijinja-autoreload"] }
+base64 = { version = "0.22.1", default-features = false, features = ["alloc", "std"] }
+chrono = { version = "0.4.38", default-features = false, features = ["std", "alloc", "now"] }
+minijinja = { version = "2.1.2", default-features = false, features = ["builtins", "deserialization", "json", "loader", "macros", "multi_template", "serde", "std_collections", "urlencode"] }
+minijinja-autoreload = { version = "2.1.2", default-features = false, optional = true, features = ["watch-fs"] }
+minijinja-embed = {version = "2.0.3", optional = true}
+p256 = { version = "0.13.2", default-features = false, features = ["alloc", "arithmetic", "digest", "ecdsa", "ecdsa-core", "jwk", "sha256"] }
+reqwest = { version = "0.12.7", default-features = false, features = ["http2", "json", "rustls-tls"] }
+serde = { version = "1.0.209", default-features = false, features = ["alloc", "derive", "rc", "std"] }
+serde_ipld_dagcbor = { version = "0.6.1", default-features = false, features = ["std"] }
+tokio = { version = "1.39.3", default-features = false, features = ["rt", "net", "rt-multi-thread", "signal", "signal-hook-registry"] }
+tower = { version = "0.5.0", default-features = false, features = ["timeout", "tracing"] }
+tower-http = { version = "0.5.2", default-features = false, features = ["cors", "fs", "timeout", "trace", "tracing"] }
+tracing = { version = "0.1.40", default-features = false, features = ["async-await", "log", "std"] }
+tracing-subscriber = { version = "0.3.18", default-features = false, features = ["env-filter", "fmt", "registry", "std"] }
