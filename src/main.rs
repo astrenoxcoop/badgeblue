@@ -24,6 +24,9 @@ use tower_http::services::ServeDir;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use xml_builder::{XMLBuilder, XMLElement};
+
+use ttf_parser::Face;
 
 use axum_template::engine::Engine;
 
@@ -40,18 +43,19 @@ pub(crate) type AppEngine = Engine<Environment<'static>>;
 pub(crate) type AppEngine = Engine<AutoReloader>;
 
 // Make our own error that wraps `anyhow::Error`.
-struct BlueBadgeError(anyhow::Error);
+#[derive(thiserror::Error, Debug)]
+#[error("An error occurred: {0}")]
+struct BlueBadgeError(#[from] anyhow::Error);
 
-impl<E> From<E> for BlueBadgeError
-where
-    E: Into<anyhow::Error>,
-{
-    fn from(err: E) -> Self {
-        Self(err.into())
-    }
-}
+// impl<E> From<E> for BlueBadgeError
+// where
+//     E: Into<anyhow::Error>,
+// {
+//     fn from(err: E) -> Self {
+//         Self(err.into())
+//     }
+// }
 
-// Tell axum how to convert `AppError` into a response.
 impl IntoResponse for BlueBadgeError {
     fn into_response(self) -> Response {
         (
@@ -65,6 +69,7 @@ impl IntoResponse for BlueBadgeError {
 pub struct InnerWebContext {
     pub engine: AppEngine,
     pub http_client: reqwest::Client,
+    pub font: ttf_parser::Face<'static>,
 }
 
 impl Deref for WebContext {
@@ -317,7 +322,6 @@ async fn handle_index(
 pub type QueryParam<'a> = (&'a str, &'a str);
 pub type QueryParams<'a> = Vec<QueryParam<'a>>;
 
-// TODO: urlencode
 pub fn stringify(query: QueryParams) -> String {
     query.iter().fold(String::new(), |acc, &tuple| {
         acc + tuple.0 + "=" + tuple.1 + "&"
@@ -371,7 +375,7 @@ pub struct WrappedJsonWebKeySet {
 async fn public_key_for_jwk_uri(
     http_client: reqwest::Client,
     jwk_url: &str,
-    good_prefixes: Vec<String>,
+    good_prefixes: &Vec<String>,
 ) -> Result<p256::PublicKey> {
     let (destination, key_id) = jwk_url
         .split_once("#")
@@ -409,7 +413,11 @@ async fn public_key_for_jwk_uri(
     p256::PublicKey::from_jwk(&found_key.jwk).map_err(|err| anyhow!("invalid JWK: {:?}", err))
 }
 
-pub fn verify_badge(key_id: &str, public_key: &p256::PublicKey, badge: &Award) -> Result<()> {
+pub fn verify_badge_signature(
+    key_id: &str,
+    public_key: &p256::PublicKey,
+    badge: &Award,
+) -> Result<()> {
     let proof = badge
         .proof
         .clone()
@@ -446,7 +454,76 @@ pub struct VerifyRequest {
     pub uri: Option<String>,
 }
 
-#[axum::debug_handler]
+#[derive(Serialize)]
+struct VerifiedBadge {
+    at_uri: String,
+    cid: String,
+    issuer_did: String,
+    issuer_handle: String,
+    subject_did: String,
+    subject_handle: String,
+    badge_display_text: String,
+    record: GetRecordResponse,
+}
+
+async fn verify_badge(
+    http_client: reqwest::Client,
+    uri: &str,
+) -> Result<VerifiedBadge, BlueBadgeError> {
+    let [did, collection, rkey] = split_at_uri(uri)?;
+
+    let (pds, handles) = pds_for_did(http_client.clone(), did).await?;
+
+    let record = get_record(http_client.clone(), &pds, did, collection, rkey).await?;
+
+    let RecordType::Award(AwardWrapper::Award(award)) = record.value.clone();
+
+    if award.proof.is_none() {
+        return Err(anyhow!("record has no proof").into());
+    }
+
+    let [issuer_did, badge_collection, _] = split_at_uri(&award.badge.uri)?;
+
+    if validate_did(issuer_did).is_err() {
+        return Err(anyhow!("invalid badge DID").into());
+    }
+
+    if badge_collection != "blue.badge.definition" {
+        return Err(anyhow!("invalid badge collection").into());
+    }
+
+    let (_, issuer_handles) = pds_for_did(http_client.clone(), &issuer_did).await?;
+
+    let public_key = public_key_for_jwk_uri(
+        http_client.clone(),
+        &award.proof.clone().unwrap().key,
+        &issuer_handles,
+    )
+    .await?;
+
+    let issuer_handle = issuer_handles
+        .first()
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    let subject_handle = handles
+        .first()
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+
+    verify_badge_signature(&award.proof.clone().unwrap().key, &public_key, &award)?;
+
+    Ok(VerifiedBadge {
+        at_uri: uri.to_string(),
+        cid: record.cid.clone(),
+        issuer_did: issuer_did.to_string(),
+        issuer_handle,
+        subject_did: did.to_string(),
+        subject_handle,
+        badge_display_text: award.badge.name.unwrap_or(award.badge.uri),
+        record,
+    })
+}
+
 async fn handle_verify(
     State(web_context): State<WebContext>,
     verify_request: Query<VerifyRequest>,
@@ -466,168 +543,520 @@ async fn handle_verify(
 
     let uri = uri.unwrap();
 
-    let uri_parts = split_at_uri(&uri);
-    if let Err(err) = uri_parts {
-        tracing::error!("error split_at_uri: {:?}", err);
-        return Ok(RenderHtml(
-            "verify.html",
-            web_context.engine.clone(),
-            template_context! {
-                messages => vec![Message::danger(None, "Invalid URI provided.")],
-            },
-        )
-        .into_response());
-    }
-    let [did, collection, rkey] = uri_parts.unwrap();
+    let verified_badge = verify_badge(web_context.http_client.clone(), &uri).await;
 
-    let pds = pds_for_did(web_context.http_client.clone(), did).await;
-    if let Err(err) = pds {
-        tracing::error!("error pds_for_did: {:?}", err);
+    if let Err(err) = verified_badge {
+        tracing::error!("error verifying badge: {:?}", err);
         return Ok(RenderHtml(
             "verify.html",
             web_context.engine.clone(),
             template_context! {
-                messages => vec![Message::danger(None, "Cannot resolve DID to PDS.")],
-                uri,
+                messages => vec![Message::danger(None, &format!("Unable to verify record: {}", err))],
+                uri
             },
         )
         .into_response());
     }
 
-    let (pds, _) = pds.unwrap();
-
-    let record = get_record(web_context.http_client.clone(), &pds, did, collection, rkey).await;
-
-    if let Err(err) = record {
-        tracing::error!("error get_record: {:?}", err);
-        return Ok(RenderHtml(
-            "verify.html",
-            web_context.engine.clone(),
-            template_context! {
-                messages => vec![Message::danger(None, "Unable to get record from PDS.")],
-                uri, did, collection, rkey, pds,
-            },
-        )
-        .into_response());
-    }
-
-    let record = record.unwrap();
-
-    let RecordType::Award(AwardWrapper::Award(award)) = record.value.clone();
-
-    if award.proof.is_none() {
-        return Ok(RenderHtml(
-            "verify.html",
-            web_context.engine.clone(),
-            template_context! {
-                messages => vec![Message::danger(None, "Record has no proof.")],
-                uri, did, collection, rkey, pds, record,
-            },
-        )
-        .into_response());
-    }
-
-    let badge_uri_parts = split_at_uri(&award.badge.uri);
-    if let Err(err) = badge_uri_parts {
-        tracing::error!("error split_at_uri for badge: {:?}", err);
-        return Ok(RenderHtml(
-            "verify.html",
-            web_context.engine.clone(),
-            template_context! {
-                messages => vec![Message::danger(None, "Invalid badge.")],
-            },
-        )
-        .into_response());
-    }
-    let [badge_did, badge_collection, _] = badge_uri_parts.unwrap();
-
-    if validate_did(badge_did).is_err() {
-        return Ok(RenderHtml(
-            "verify.html",
-            web_context.engine.clone(),
-            template_context! {
-                messages => vec![Message::danger(None, "Invalid badge DID.")],
-                uri, did, collection, rkey, pds, award,
-            },
-        )
-        .into_response());
-    }
-
-    if badge_collection != "blue.badge.definition" {
-        return Ok(RenderHtml(
-            "verify.html",
-            web_context.engine.clone(),
-            template_context! {
-                messages => vec![Message::danger(None, "Invalid badge collection.")],
-                uri, did, collection, rkey, pds, award,
-            },
-        )
-        .into_response());
-    }
-
-    let badge_pds = pds_for_did(web_context.http_client.clone(), &badge_did).await;
-    if let Err(err) = badge_pds {
-        tracing::error!("error pds_for_did: {:?}", err);
-        return Ok(RenderHtml(
-            "verify.html",
-            web_context.engine.clone(),
-            template_context! {
-                messages => vec![Message::danger(None, "Cannot resolve badge DID to PDS.")],
-                uri,
-            },
-        )
-        .into_response());
-    }
-
-    let (_, badge_good_prefixes) = badge_pds.unwrap();
-
-    let public_key = public_key_for_jwk_uri(
-        web_context.http_client.clone(),
-        &award.proof.clone().unwrap().key,
-        badge_good_prefixes,
-    )
-    .await;
-
-    if let Err(err) = public_key {
-        tracing::error!("error public_key_for_jwk_uri: {:?}", err);
-        return Ok(RenderHtml(
-            "verify.html",
-            web_context.engine.clone(),
-            template_context! {
-                messages => vec![Message::danger(None, "Unable to get the public key from the JWK URI.")],
-                uri, did, collection, rkey, pds, award,
-            },
-        )
-        .into_response());
-    }
-
-    let public_key = public_key.unwrap();
-
-    let verify = verify_badge(&award.proof.clone().unwrap().key, &public_key, &award);
-
-    if let Err(err) = verify {
-        tracing::error!("error public_key_for_jwk_uri: {:?}", err);
-        return Ok(RenderHtml(
-            "verify.html",
-            web_context.engine.clone(),
-            template_context! {
-                messages => vec![Message::danger(None, "Signature verification failed.")],
-                uri, did, collection, rkey, pds, award,
-            },
-        )
-        .into_response());
-    }
+    let verified_badge = verified_badge.unwrap();
 
     Ok(RenderHtml(
         "verify.html",
         web_context.engine.clone(),
         template_context! {
             messages => vec![Message::success(None, "Record is valid!")],
-            uri, did, collection, rkey, pds, award, record
+            uri, verified_badge,
         },
     )
     .into_response())
 }
+
+pub fn face_text_size(face: &Face, text: &str, font_size: f32) -> (f32, f32) {
+    let units_per_em = face.units_per_em() as f32;
+    let scale_factor = font_size / units_per_em;
+
+    let width = text
+        .chars()
+        .filter_map(|ch| {
+            face.glyph_index(ch)
+                .and_then(|glyph_id| face.glyph_hor_advance(glyph_id))
+        })
+        .map(|advance| advance as f32 * scale_factor)
+        .sum::<f32>();
+
+    let ascender = face.ascender() as f32 * scale_factor;
+    let descender = face.descender() as f32 * scale_factor;
+    let height = (ascender - descender).abs();
+
+    (width, height)
+}
+
+pub fn truncate(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        None => s,
+        Some((idx, _)) => &s[..idx],
+    }
+}
+
+fn render_error_svg(
+    font: &ttf_parser::Face<'static>,
+    message: &str,
+) -> Result<Vec<u8>, BlueBadgeError> {
+    let display_message = truncate(message, 50);
+    let display_message_width = {
+        let (width, _height) = face_text_size(&font, display_message, 12.0);
+        (width + 13.0).round_ties_even()
+    };
+
+    let mut xml = XMLBuilder::new().standalone(Some(true)).build();
+
+    let mut svg = XMLElement::new("svg");
+    svg.add_attribute("xmlns", "http://www.w3.org/2000/svg");
+    svg.add_attribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
+    svg.add_attribute("width", &format!("{}", display_message_width));
+    svg.add_attribute("height", "20");
+
+    let mut title_element = XMLElement::new("title");
+    title_element
+        .add_text(display_message.to_string())
+        .context(anyhow!("unable to generate svg"))?;
+
+    svg.add_child(title_element)
+        .context(anyhow!("unable to generate svg"))?;
+
+    let linear_gradient = {
+        let mut background = XMLElement::new("linearGradient");
+        background.add_attribute("id", "smooth");
+        background.add_attribute("x2", "0");
+        background.add_attribute("y2", "100%");
+
+        let mut background_stop1 = XMLElement::new("stop");
+        background_stop1.add_attribute("offset", "0");
+        background_stop1.add_attribute("stop-color", "#bbb"); // grey
+        background_stop1.add_attribute("stop-opacity", ".1");
+
+        let mut background_stop2 = XMLElement::new("stop");
+        background_stop2.add_attribute("offset", "1");
+        background_stop2.add_attribute("stop-opacity", ".1");
+
+        background
+            .add_child(background_stop1)
+            .context(anyhow!("unable to generate svg"))?;
+        background
+            .add_child(background_stop2)
+            .context(anyhow!("unable to generate svg"))?;
+        background
+    };
+
+    svg.add_child(linear_gradient)
+        .context(anyhow!("unable to generate svg"))?;
+
+    let mask = {
+        let mut mask_parent = XMLElement::new("mask");
+        mask_parent.add_attribute("id", "round");
+
+        let mut mask_rect = XMLElement::new("rect");
+        mask_rect.add_attribute("width", &format!("{}", display_message_width));
+        mask_rect.add_attribute("height", "20");
+        mask_rect.add_attribute("rx", "3");
+        mask_rect.add_attribute("fill", "#fff"); // white
+
+        mask_parent
+            .add_child(mask_rect)
+            .context(anyhow!("unable to generate svg"))?;
+
+        mask_parent
+    };
+
+    svg.add_child(mask)
+        .context(anyhow!("unable to generate svg"))?;
+
+    let group_one = {
+        let mut group1 = XMLElement::new("g");
+        group1.add_attribute("mask", "url(#round)");
+
+        let mut group1_rect = XMLElement::new("rect");
+        group1_rect.add_attribute("width", &format!("{}", display_message_width));
+        group1_rect.add_attribute("height", "20");
+        group1_rect.add_attribute("fill", "#e05d44"); // Danger Red
+
+        group1
+            .add_child(group1_rect)
+            .context(anyhow!("unable to generate svg"))?;
+
+        let mut group4_rect = XMLElement::new("rect");
+        group4_rect.add_attribute("width", &format!("{}", display_message_width));
+        group4_rect.add_attribute("height", "20");
+        group4_rect.add_attribute("fill", "url(#smooth)");
+
+        group1
+            .add_child(group4_rect)
+            .context(anyhow!("unable to generate svg"))?;
+        group1
+    };
+
+    svg.add_child(group_one)
+        .context(anyhow!("unable to generate svg"))?;
+
+    let group_two = {
+        let mut group2 = XMLElement::new("g");
+        group2.add_attribute("fill", "#fff");
+        group2.add_attribute("text-anchor", "middle");
+        group2.add_attribute(
+            "font-family",
+            "DejaVuSansM Nerd Font, DejaVu Sans,Verdana,Geneva,sans-serif",
+        );
+        group2.add_attribute("font-size", "12");
+
+        let mut group2_text1 = XMLElement::new("text");
+        group2_text1.add_attribute("x", &format!("{}", (display_message_width / 2.0)));
+        group2_text1.add_attribute("y", "15");
+        group2_text1.add_attribute("fill", "#010101");
+        group2_text1.add_attribute("fill-opacity", ".3");
+        group2_text1
+            .add_text(display_message.to_string())
+            .context(anyhow!("unable to generate svg"))?;
+
+        group2
+            .add_child(group2_text1)
+            .context(anyhow!("unable to generate svg"))?;
+
+        let mut group2_text2 = XMLElement::new("text");
+        group2_text2.add_attribute("x", &format!("{}", (display_message_width / 2.0)));
+        group2_text2.add_attribute("y", "14");
+        group2_text2
+            .add_text(display_message.to_string())
+            .context(anyhow!("unable to generate svg"))?;
+
+        group2
+            .add_child(group2_text2)
+            .context(anyhow!("unable to generate svg"))?;
+
+        group2
+    };
+    svg.add_child(group_two)
+        .context(anyhow!("unable to generate svg"))?;
+
+    xml.set_root_element(svg);
+
+    let mut xml_buffer: Vec<u8> = Vec::new();
+    xml.generate(&mut xml_buffer)
+        .context(anyhow!("unable to generate svg"))?;
+
+    Ok(xml_buffer)
+}
+
+fn render_award_svg(
+    font: &ttf_parser::Face<'static>,
+    issuer_label: &str,
+    subject_label: &str,
+    badge_label: &str,
+    valid: bool,
+) -> Result<Vec<u8>, BlueBadgeError> {
+    let display_issuer_label = truncate(issuer_label, 50);
+    let display_subject_label = truncate(subject_label, 50);
+    let display_badge_label = truncate(badge_label, 50);
+    let title = format!("{} {} {}", issuer_label, subject_label, badge_label);
+
+    let issuer_width = {
+        let (width, _height) = face_text_size(&font, &display_issuer_label, 12.0);
+        (width + 13.0).round_ties_even()
+    };
+
+    let subject_width = {
+        let (width, _height) = face_text_size(&font, &display_subject_label, 12.0);
+        (width + 13.0).round_ties_even()
+    };
+
+    let badge_width = {
+        let (width, _height) = face_text_size(&font, &display_badge_label, 12.0);
+        (width + 13.0).round_ties_even()
+    };
+
+    let full_width = issuer_width + subject_width + badge_width;
+
+    let mut xml = XMLBuilder::new().standalone(Some(true)).build();
+
+    let mut svg = XMLElement::new("svg");
+    svg.add_attribute("xmlns", "http://www.w3.org/2000/svg");
+    svg.add_attribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
+    svg.add_attribute("width", &format!("{}", full_width));
+    svg.add_attribute("height", "20");
+
+    let mut title_element = XMLElement::new("title");
+    title_element
+        .add_text(title.to_string())
+        .context(anyhow!("unable to generate svg"))?;
+
+    svg.add_child(title_element)
+        .context(anyhow!("unable to generate svg"))?;
+
+    let linear_gradient = {
+        let mut background = XMLElement::new("linearGradient");
+        background.add_attribute("id", "smooth");
+        background.add_attribute("x2", "0");
+        background.add_attribute("y2", "100%");
+
+        let mut background_stop1 = XMLElement::new("stop");
+        background_stop1.add_attribute("offset", "0");
+        background_stop1.add_attribute("stop-color", "#bbb"); // grey
+        background_stop1.add_attribute("stop-opacity", ".1");
+
+        let mut background_stop2 = XMLElement::new("stop");
+        background_stop2.add_attribute("offset", "1");
+        background_stop2.add_attribute("stop-opacity", ".1");
+
+        background
+            .add_child(background_stop1)
+            .context(anyhow!("unable to generate svg"))?;
+        background
+            .add_child(background_stop2)
+            .context(anyhow!("unable to generate svg"))?;
+        background
+    };
+
+    svg.add_child(linear_gradient)
+        .context(anyhow!("unable to generate svg"))?;
+
+    let mask = {
+        let mut mask_parent = XMLElement::new("mask");
+        mask_parent.add_attribute("id", "round");
+
+        let mut mask_rect = XMLElement::new("rect");
+        mask_rect.add_attribute("width", &format!("{}", full_width));
+        mask_rect.add_attribute("height", "20");
+        mask_rect.add_attribute("rx", "3");
+        mask_rect.add_attribute("fill", "#fff"); // white
+
+        mask_parent
+            .add_child(mask_rect)
+            .context(anyhow!("unable to generate svg"))?;
+
+        mask_parent
+    };
+
+    svg.add_child(mask)
+        .context(anyhow!("unable to generate svg"))?;
+
+    let group_one = {
+        let mut group1 = XMLElement::new("g");
+        group1.add_attribute("mask", "url(#round)");
+
+        let mut group1_rect = XMLElement::new("rect");
+        group1_rect.add_attribute("width", &format!("{}", issuer_width));
+        group1_rect.add_attribute("height", "20");
+        group1_rect.add_attribute("fill", "#555"); // Dark grey
+
+        group1
+            .add_child(group1_rect)
+            .context(anyhow!("unable to generate svg"))?;
+
+        let mut group2_rect = XMLElement::new("rect");
+        group2_rect.add_attribute("width", &format!("{}", subject_width));
+        group2_rect.add_attribute("height", "20");
+        if valid {
+            group2_rect.add_attribute("fill", "#4c1"); // Success Green
+        } else {
+            group2_rect.add_attribute("fill", "#e05d44"); // Danger Red
+        }
+        group2_rect.add_attribute("x", &format!("{}", issuer_width));
+
+        group1
+            .add_child(group2_rect)
+            .context(anyhow!("unable to generate svg"))?;
+
+        let mut group3_rect = XMLElement::new("rect");
+        group3_rect.add_attribute("width", &format!("{}", badge_width));
+        group3_rect.add_attribute("height", "20");
+        if valid {
+            group3_rect.add_attribute("fill", "#007ec6"); // Dark blue
+        } else {
+            group3_rect.add_attribute("fill", "#e05d44"); // Danger Red
+        }
+        group3_rect.add_attribute("x", &format!("{}", issuer_width + subject_width));
+
+        group1
+            .add_child(group3_rect)
+            .context(anyhow!("unable to generate svg"))?;
+
+        let mut group4_rect = XMLElement::new("rect");
+        group4_rect.add_attribute("width", &format!("{}", full_width));
+        group4_rect.add_attribute("height", "20");
+        group4_rect.add_attribute("fill", "url(#smooth)");
+
+        group1
+            .add_child(group4_rect)
+            .context(anyhow!("unable to generate svg"))?;
+        group1
+    };
+
+    svg.add_child(group_one)
+        .context(anyhow!("unable to generate svg"))?;
+
+    let group_two = {
+        let mut group2 = XMLElement::new("g");
+        group2.add_attribute("fill", "#fff");
+        group2.add_attribute("text-anchor", "middle");
+        group2.add_attribute(
+            "font-family",
+            "DejaVuSansM Nerd Font, DejaVu Sans,Verdana,Geneva,sans-serif",
+        );
+        group2.add_attribute("font-size", "12");
+
+        let mut group2_text1 = XMLElement::new("text");
+        group2_text1.add_attribute("x", &format!("{}", (issuer_width / 2.0)));
+        group2_text1.add_attribute("y", "15");
+        group2_text1.add_attribute("fill", "#010101");
+        group2_text1.add_attribute("fill-opacity", ".3");
+        group2_text1
+            .add_text(issuer_label.to_string())
+            .context(anyhow!("unable to generate svg"))?;
+
+        group2
+            .add_child(group2_text1)
+            .context(anyhow!("unable to generate svg"))?;
+
+        let mut group2_text2 = XMLElement::new("text");
+        group2_text2.add_attribute("x", &format!("{}", (issuer_width / 2.0)));
+        group2_text2.add_attribute("y", "14");
+        group2_text2
+            .add_text(issuer_label.to_string())
+            .context(anyhow!("unable to generate svg"))?;
+
+        group2
+            .add_child(group2_text2)
+            .context(anyhow!("unable to generate svg"))?;
+
+        let mut group2_text3 = XMLElement::new("text");
+        group2_text3.add_attribute("x", &format!("{}", issuer_width + (subject_width / 2.0)));
+        group2_text3.add_attribute("y", "15");
+        // group2_text3.add_attribute("fill", "#010101");
+        group2_text3.add_attribute("fill", "#000");
+        group2_text3.add_attribute("fill-opacity", ".3");
+        group2_text3
+            .add_text(subject_label.to_string())
+            .context(anyhow!("unable to generate svg"))?;
+
+        group2
+            .add_child(group2_text3)
+            .context(anyhow!("unable to generate svg"))?;
+
+        let mut group2_text4 = XMLElement::new("text");
+        group2_text4.add_attribute("x", &format!("{}", issuer_width + (subject_width / 2.0)));
+        group2_text4.add_attribute("y", "14");
+        group2_text4
+            .add_text(display_subject_label.to_string())
+            .context(anyhow!("unable to generate svg"))?;
+
+        group2
+            .add_child(group2_text4)
+            .context(anyhow!("unable to generate svg"))?;
+
+        let mut group2_text5 = XMLElement::new("text");
+        group2_text5.add_attribute(
+            "x",
+            &format!("{}", issuer_width + subject_width + (badge_width / 2.0)),
+        );
+        group2_text5.add_attribute("y", "15");
+        group2_text5.add_attribute("fill", "#010101");
+        group2_text5.add_attribute("fill-opacity", ".3");
+        group2_text5
+            .add_text(display_badge_label.to_string())
+            .context(anyhow!("unable to generate svg"))?;
+
+        group2
+            .add_child(group2_text5)
+            .context(anyhow!("unable to generate svg"))?;
+
+        let mut group2_text6 = XMLElement::new("text");
+        group2_text6.add_attribute(
+            "x",
+            &format!("{}", issuer_width + subject_width + (badge_width / 2.0)),
+        );
+        group2_text6.add_attribute("y", "14");
+        group2_text6
+            .add_text(display_badge_label.to_string())
+            .context(anyhow!("unable to generate svg"))?;
+
+        group2
+            .add_child(group2_text6)
+            .context(anyhow!("unable to generate svg"))?;
+        group2
+    };
+    svg.add_child(group_two)
+        .context(anyhow!("unable to generate svg"))?;
+
+    xml.set_root_element(svg);
+
+    let mut xml_buffer: Vec<u8> = Vec::new();
+    xml.generate(&mut xml_buffer)
+        .context(anyhow!("unable to generate svg"))?;
+
+    Ok(xml_buffer)
+}
+
+const CONTENT_TYPE: axum::http::HeaderName = axum::http::HeaderName::from_static("content-type");
+const CACHE_CONTROL: axum::http::HeaderName = axum::http::HeaderName::from_static("cache-control");
+const CDN_CACHE_CONTROL: axum::http::HeaderName = axum::http::HeaderName::from_static("cdn-cache-control");
+const ETAG: axum::http::HeaderName = axum::http::HeaderName::from_static("etag");
+
+async fn handle_render_award_svg(
+    State(web_context): State<WebContext>,
+    verify_request: Query<VerifyRequest>,
+) -> Result<impl IntoResponse, BlueBadgeError> {
+    let uri = verify_request.uri.clone();
+
+    if uri.is_none() {
+        return Ok((StatusCode::NOT_FOUND).into_response());
+    }
+
+    let uri = uri.unwrap();
+
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(CONTENT_TYPE, "image/svg+xml".parse().unwrap());
+
+    let verified_badge = verify_badge(web_context.http_client.clone(), &uri).await;
+
+    if let Err(err) = verified_badge {
+        tracing::error!("error verifying badge: {:?}", err);
+
+        headers.insert(CACHE_CONTROL, "max-age=600".parse().unwrap());
+        headers.insert(CDN_CACHE_CONTROL, "max-age=3600".parse().unwrap());
+
+        let badge_svg = render_error_svg(
+            &web_context.font,
+            &format!("Error! Cannot Validate Record: {}", err),
+        )?;
+        return Ok((headers, badge_svg).into_response());
+    }
+
+    let verified_badge = verified_badge.unwrap();
+
+    headers.insert(CACHE_CONTROL, "max-age=2160".parse().unwrap());
+    headers.insert(CDN_CACHE_CONTROL, "max-age=8640".parse().unwrap());
+    headers.insert(ETAG, verified_badge.cid.parse().unwrap());
+
+    let issue_handle = verified_badge
+        .issuer_handle
+        .clone()
+        .replace("https://", "@");
+    let subject_handle = verified_badge
+        .subject_handle
+        .clone()
+        .replace("https://", "@");
+
+    let badge_svg = render_award_svg(
+        &web_context.font,
+        &issue_handle,
+        &subject_handle,
+        &verified_badge.badge_display_text,
+        true,
+    )?;
+
+    Ok((headers, badge_svg).into_response())
+}
+
+const FONT_DATA: &'static [u8] = include_bytes!(env!("FONT_PATH"));
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -651,9 +1080,13 @@ async fn main() -> Result<()> {
     #[cfg(feature = "reload")]
     let jinja = reload_env::build_env(&http_external);
 
+    let font =
+        ttf_parser::Face::parse(&FONT_DATA, 0).context(anyhow!("unable to parse font data"))?;
+
     let web_context = WebContext(Arc::new(InnerWebContext {
         engine: Engine::from(jinja),
         http_client: reqwest::Client::new(),
+        font,
     }));
 
     let serve_dir = ServeDir::new("static");
@@ -663,6 +1096,7 @@ async fn main() -> Result<()> {
         .fallback_service(serve_dir)
         .route("/", get(handle_index))
         .route("/verify", get(handle_verify))
+        .route("/render/badge", get(handle_render_award_svg))
         .layer((
             TraceLayer::new_for_http(),
             TimeoutLayer::new(Duration::from_secs(30)),
