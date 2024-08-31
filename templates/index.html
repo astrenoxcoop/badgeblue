@@ -82,4 +82,18 @@
         encoded badge record without the proof element (just the $type, did, badge, and issued elements).
     </p>
 </section>
+
+<section class="section content">
+  <h1 class="title">Badge Image Embedding</h1>
+  <p>
+    Badges can be embedded as SVG images using the https://render.badge.blue/badge URL with the `uri` query string parameter:
+    <a rel="nofollow" href="https://render.badge.blue/badge?uri=at://did:plc:cbkjy5n7bk3ax2wplmtjofq2/blue.badge.collection/3l2npthykb226">
+      https://render.badge.blue/badge?uri=at://did:plc:cbkjy5n7bk3ax2wplmtjofq2/blue.badge.collection/3l2npthykb226
+    </a>
+  </p>
+  <p>The rendered badge image will include the issuer handle, subject handle, and badge title.</p>
+  <p>
+    <img src="https://render.badge.blue/badge?uri=at://did:plc:cbkjy5n7bk3ax2wplmtjofq2/blue.badge.collection/3l2npthykb226" />
+  </p>
+</section>
 {% endblock %}
