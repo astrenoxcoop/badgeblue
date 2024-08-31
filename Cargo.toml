@@ -12,6 +12,7 @@ embed = ["dep:minijinja-embed"]
 minijinja-embed = {version = "2.0.3"}
 
 [dependencies]
+ammonia = "4.0.0"
 anyhow = "1.0.86"
 axum = { version = "0.7.5", default-features = false, features = ["http2", "http1", "matched-path", "original-uri", "tokio", "macros", "query"] }
 axum-template = { version = "2.4.0", features = ["minijinja", "minijinja-autoreload"] }

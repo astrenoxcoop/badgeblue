@@ -592,9 +592,14 @@ pub fn truncate(s: &str, max_chars: usize) -> &str {
 
 fn render_error_svg(
     font: &ttf_parser::Face<'static>,
-    message: &str,
+    raw_message: &str,
 ) -> Result<Vec<u8>, BlueBadgeError> {
-    let display_message = truncate(message, 50);
+    let message = ammonia::Builder::new()
+        .tags(HashSet::new())
+        .clean(raw_message)
+        .to_string();
+
+    let display_message = truncate(&message, 50);
     let display_message_width = {
         let (width, _height) = face_text_size(font, display_message, 12.0);
         (width + 13.0).round_ties_even()
@@ -738,16 +743,31 @@ fn render_error_svg(
     Ok(xml_buffer)
 }
 
+use std::collections::HashSet;
+
 fn render_award_svg(
     font: &ttf_parser::Face<'static>,
-    issuer_label: &str,
-    subject_label: &str,
-    badge_label: &str,
-    valid: bool,
+    raw_issuer_label: &str,
+    raw_subject_label: &str,
+    raw_badge_label: &str,
 ) -> Result<Vec<u8>, BlueBadgeError> {
-    let display_issuer_label = truncate(issuer_label, 50);
-    let display_subject_label = truncate(subject_label, 50);
-    let display_badge_label = truncate(badge_label, 50);
+    let issuer_label = ammonia::Builder::new()
+        .tags(HashSet::new())
+        .clean(raw_issuer_label)
+        .to_string();
+    let subject_label = ammonia::Builder::new()
+        .tags(HashSet::new())
+        .clean(raw_subject_label)
+        .to_string();
+    let badge_label = ammonia::Builder::new()
+        .tags(HashSet::new())
+        .clean(raw_badge_label)
+        .to_string();
+
+    let display_issuer_label = truncate(&issuer_label, 50);
+    let display_subject_label = truncate(&subject_label, 50);
+    let display_badge_label = truncate(&badge_label, 50);
+
     let title = format!("{} {} {}", issuer_label, subject_label, badge_label);
 
     let issuer_width = {
@@ -846,11 +866,7 @@ fn render_award_svg(
         let mut group2_rect = XMLElement::new("rect");
         group2_rect.add_attribute("width", &format!("{}", subject_width));
         group2_rect.add_attribute("height", "20");
-        if valid {
-            group2_rect.add_attribute("fill", "#4c1"); // Success Green
-        } else {
-            group2_rect.add_attribute("fill", "#e05d44"); // Danger Red
-        }
+        group2_rect.add_attribute("fill", "#4c1"); // Success Green
         group2_rect.add_attribute("x", &format!("{}", issuer_width));
 
         group1
@@ -860,11 +876,7 @@ fn render_award_svg(
         let mut group3_rect = XMLElement::new("rect");
         group3_rect.add_attribute("width", &format!("{}", badge_width));
         group3_rect.add_attribute("height", "20");
-        if valid {
-            group3_rect.add_attribute("fill", "#007ec6"); // Dark blue
-        } else {
-            group3_rect.add_attribute("fill", "#e05d44"); // Danger Red
-        }
+        group3_rect.add_attribute("fill", "#007ec6"); // Dark blue
         group3_rect.add_attribute("x", &format!("{}", issuer_width + subject_width));
 
         group1
@@ -1043,7 +1055,6 @@ async fn handle_render_award_svg(
         &issue_handle,
         &subject_handle,
         &verified_badge.badge_display_text,
-        true,
     )?;
 
     Ok((headers, badge_svg).into_response())
@@ -1098,7 +1109,6 @@ async fn handle_render_award_png(
                 &issue_handle,
                 &subject_handle,
                 &verified_badge.badge_display_text,
-                true,
             )?
         }
     };
