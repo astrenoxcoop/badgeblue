@@ -47,15 +47,6 @@ pub(crate) type AppEngine = Engine<AutoReloader>;
 #[error("An error occurred: {0}")]
 struct BlueBadgeError(#[from] anyhow::Error);
 
-// impl<E> From<E> for BlueBadgeError
-// where
-//     E: Into<anyhow::Error>,
-// {
-//     fn from(err: E) -> Self {
-//         Self(err.into())
-//     }
-// }
-
 impl IntoResponse for BlueBadgeError {
     fn into_response(self) -> Response {
         (
@@ -70,6 +61,7 @@ pub struct InnerWebContext {
     pub engine: AppEngine,
     pub http_client: reqwest::Client,
     pub font: ttf_parser::Face<'static>,
+    pub fontdb: Arc<fontdb::Database>,
 }
 
 impl Deref for WebContext {
@@ -378,7 +370,7 @@ async fn public_key_for_jwk_uri(
     good_prefixes: &Vec<String>,
 ) -> Result<p256::PublicKey> {
     let (destination, key_id) = jwk_url
-        .split_once("#")
+        .split_once('#')
         .context(anyhow!("invalid JWK URL"))?;
 
     if !good_prefixes
@@ -492,7 +484,7 @@ async fn verify_badge(
         return Err(anyhow!("invalid badge collection").into());
     }
 
-    let (_, issuer_handles) = pds_for_did(http_client.clone(), &issuer_did).await?;
+    let (_, issuer_handles) = pds_for_did(http_client.clone(), issuer_did).await?;
 
     let public_key = public_key_for_jwk_uri(
         http_client.clone(),
@@ -604,7 +596,7 @@ fn render_error_svg(
 ) -> Result<Vec<u8>, BlueBadgeError> {
     let display_message = truncate(message, 50);
     let display_message_width = {
-        let (width, _height) = face_text_size(&font, display_message, 12.0);
+        let (width, _height) = face_text_size(font, display_message, 12.0);
         (width + 13.0).round_ties_even()
     };
 
@@ -704,7 +696,7 @@ fn render_error_svg(
         group2.add_attribute("text-anchor", "middle");
         group2.add_attribute(
             "font-family",
-            "DejaVuSansM Nerd Font, DejaVu Sans,Verdana,Geneva,sans-serif",
+            "DejaVuSansM Nerd Font,DejaVu Sans,Verdana,Geneva,sans-serif",
         );
         group2.add_attribute("font-size", "12");
 
@@ -759,17 +751,17 @@ fn render_award_svg(
     let title = format!("{} {} {}", issuer_label, subject_label, badge_label);
 
     let issuer_width = {
-        let (width, _height) = face_text_size(&font, &display_issuer_label, 12.0);
+        let (width, _height) = face_text_size(font, display_issuer_label, 12.0);
         (width + 13.0).round_ties_even()
     };
 
     let subject_width = {
-        let (width, _height) = face_text_size(&font, &display_subject_label, 12.0);
+        let (width, _height) = face_text_size(font, display_subject_label, 12.0);
         (width + 13.0).round_ties_even()
     };
 
     let badge_width = {
-        let (width, _height) = face_text_size(&font, &display_badge_label, 12.0);
+        let (width, _height) = face_text_size(font, display_badge_label, 12.0);
         (width + 13.0).round_ties_even()
     };
 
@@ -899,7 +891,7 @@ fn render_award_svg(
         group2.add_attribute("text-anchor", "middle");
         group2.add_attribute(
             "font-family",
-            "DejaVuSansM Nerd Font, DejaVu Sans,Verdana,Geneva,sans-serif",
+            "DejaVuSansM Nerd Font,DejaVu Sans,Verdana,Geneva,sans-serif",
         );
         group2.add_attribute("font-size", "12");
 
@@ -997,7 +989,8 @@ fn render_award_svg(
 
 const CONTENT_TYPE: axum::http::HeaderName = axum::http::HeaderName::from_static("content-type");
 const CACHE_CONTROL: axum::http::HeaderName = axum::http::HeaderName::from_static("cache-control");
-const CDN_CACHE_CONTROL: axum::http::HeaderName = axum::http::HeaderName::from_static("cdn-cache-control");
+const CDN_CACHE_CONTROL: axum::http::HeaderName =
+    axum::http::HeaderName::from_static("cdn-cache-control");
 const ETAG: axum::http::HeaderName = axum::http::HeaderName::from_static("etag");
 
 async fn handle_render_award_svg(
@@ -1056,7 +1049,80 @@ async fn handle_render_award_svg(
     Ok((headers, badge_svg).into_response())
 }
 
-const FONT_DATA: &'static [u8] = include_bytes!(env!("FONT_PATH"));
+async fn handle_render_award_png(
+    State(web_context): State<WebContext>,
+    verify_request: Query<VerifyRequest>,
+) -> Result<impl IntoResponse, BlueBadgeError> {
+    let uri = verify_request.uri.clone();
+
+    if uri.is_none() {
+        return Ok((StatusCode::NOT_FOUND).into_response());
+    }
+
+    let uri = uri.unwrap();
+
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(CONTENT_TYPE, "image/png".parse().unwrap());
+
+    let verified_badge = verify_badge(web_context.http_client.clone(), &uri).await;
+
+    let rendered_svg = match verified_badge {
+        Err(err) => {
+            tracing::error!("error verifying badge: {:?}", err);
+
+            headers.insert(CACHE_CONTROL, "max-age=600".parse().unwrap());
+            headers.insert(CDN_CACHE_CONTROL, "max-age=3600".parse().unwrap());
+
+            render_error_svg(
+                &web_context.font,
+                &format!("Error! Cannot Validate Record: {}", err),
+            )?
+        }
+
+        Ok(verified_badge) => {
+            headers.insert(CACHE_CONTROL, "max-age=2160".parse().unwrap());
+            headers.insert(CDN_CACHE_CONTROL, "max-age=8640".parse().unwrap());
+            headers.insert(ETAG, verified_badge.cid.parse().unwrap());
+
+            let issue_handle = verified_badge
+                .issuer_handle
+                .clone()
+                .replace("https://", "@");
+            let subject_handle = verified_badge
+                .subject_handle
+                .clone()
+                .replace("https://", "@");
+
+            render_award_svg(
+                &web_context.font,
+                &issue_handle,
+                &subject_handle,
+                &verified_badge.badge_display_text,
+                true,
+            )?
+        }
+    };
+
+    let opt = usvg::Options {
+        fontdb: web_context.fontdb.clone(),
+        ..Default::default()
+    };
+
+    let tree = usvg::Tree::from_data(&rendered_svg, &opt)
+        .context(anyhow!("unable to process rendered svg"))?;
+
+    let pixmap_size = tree.size().to_int_size();
+    let mut pixmap = tiny_skia::Pixmap::new(pixmap_size.width(), pixmap_size.height()).unwrap();
+    resvg::render(&tree, tiny_skia::Transform::default(), &mut pixmap.as_mut());
+
+    let badge_png = pixmap
+        .encode_png()
+        .context(anyhow!("unable to encode png"))?;
+
+    Ok((headers, badge_png).into_response())
+}
+
+const FONT_DATA: &[u8] = include_bytes!(env!("FONT_PATH"));
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -1081,12 +1147,16 @@ async fn main() -> Result<()> {
     let jinja = reload_env::build_env(&http_external);
 
     let font =
-        ttf_parser::Face::parse(&FONT_DATA, 0).context(anyhow!("unable to parse font data"))?;
+        ttf_parser::Face::parse(FONT_DATA, 0).context(anyhow!("unable to parse font data"))?;
+
+    let mut font_database = fontdb::Database::new();
+    font_database.load_font_data(FONT_DATA.to_vec());
 
     let web_context = WebContext(Arc::new(InnerWebContext {
         engine: Engine::from(jinja),
         http_client: reqwest::Client::new(),
         font,
+        fontdb: Arc::new(font_database),
     }));
 
     let serve_dir = ServeDir::new("static");
@@ -1096,7 +1166,9 @@ async fn main() -> Result<()> {
         .fallback_service(serve_dir)
         .route("/", get(handle_index))
         .route("/verify", get(handle_verify))
-        .route("/render/badge", get(handle_render_award_svg))
+        .route("/render/badge", get(handle_render_award_png))
+        .route("/render/badge.svg", get(handle_render_award_svg))
+        .route("/render/badge.png", get(handle_render_award_png))
         .layer((
             TraceLayer::new_for_http(),
             TimeoutLayer::new(Duration::from_secs(30)),
