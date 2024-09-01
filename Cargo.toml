@@ -14,11 +14,14 @@ minijinja-embed = {version = "2.0.3"}
 [dependencies]
 ammonia = "4.0.0"
 anyhow = "1.0.86"
+async-trait = { version = "0.1.81", default-features = false }
 axum = { version = "0.7.5", default-features = false, features = ["http2", "http1", "matched-path", "original-uri", "tokio", "macros", "query"] }
+axum-extra = { version = "0.9.3", default-features = false, features = ["cookie", "form", "typed-header"] }
 axum-template = { version = "2.4.0", features = ["minijinja", "minijinja-autoreload"] }
 base64 = { version = "0.22.1", default-features = false, features = ["alloc", "std"] }
 chrono = { version = "0.4.38", default-features = false, features = ["std", "alloc", "now"] }
 fontdb = "0.21.0"
+headers = { version = "0.4.0", default-features = false }
 minijinja = { version = "2.1.2", default-features = false, features = ["builtins", "deserialization", "json", "loader", "macros", "multi_template", "serde", "std_collections", "urlencode"] }
 minijinja-autoreload = { version = "2.1.2", default-features = false, optional = true, features = ["watch-fs"] }
 minijinja-embed = {version = "2.0.3", optional = true}
@@ -35,5 +38,6 @@ tower-http = { version = "0.5.2", default-features = false, features = ["cors", 
 tracing = { version = "0.1.40", default-features = false, features = ["async-await", "log", "std"] }
 tracing-subscriber = { version = "0.3.18", default-features = false, features = ["env-filter", "fmt", "registry", "std"] }
 ttf-parser = "0.24.1"
+unic-langid = { version = "0.9.5", default-features = false }
 usvg = "0.43.0"
 xml-builder = "0.5.3"

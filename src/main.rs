@@ -1,12 +1,16 @@
 use anyhow::{anyhow, Context, Result};
+use async_trait::async_trait;
 use axum::{
-    extract::{FromRef, Query, State},
-    http::{HeaderValue, Method, StatusCode},
-    response::{IntoResponse, Response},
-    routing::get,
+    extract::{FromRef, FromRequestParts, Query, State},
+    http::{request::Parts, HeaderValue, Method, StatusCode},
+    response::{IntoResponse, Redirect, Response},
+    routing::{get, post},
     Router,
 };
-
+use axum_extra::extract::{
+    cookie::{Cookie, CookieJar, SameSite},
+    Form,
+};
 use axum_template::RenderHtml;
 use base64::{engine::general_purpose, Engine as _};
 use chrono::{DateTime, Utc};
@@ -16,6 +20,8 @@ use p256::{
     elliptic_curve::JwkEcKey,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::str::FromStr;
 use std::{env, ops::Deref, sync::Arc, time::Duration};
 use tokio::net::TcpListener;
 use tokio::signal;
@@ -24,6 +30,7 @@ use tower_http::services::ServeDir;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use unic_langid::LanguageIdentifier;
 use xml_builder::{XMLBuilder, XMLElement};
 
 use ttf_parser::Face;
@@ -39,19 +46,26 @@ use minijinja::Environment;
 #[cfg(feature = "embed")]
 pub(crate) type AppEngine = Engine<Environment<'static>>;
 
+const FONT_DATA: &[u8] = include_bytes!(env!("FONT_PATH"));
+
 #[cfg(feature = "reload")]
 pub(crate) type AppEngine = Engine<AutoReloader>;
 
 // Make our own error that wraps `anyhow::Error`.
 #[derive(thiserror::Error, Debug)]
-#[error("An error occurred: {0}")]
-struct BlueBadgeError(#[from] anyhow::Error);
+pub enum BlueBadgeError {
+    #[error("ERR-XXX Invalid Language")]
+    InvalidLanguage(),
+
+    #[error("An error occurred: {0}")]
+    Anyhow(#[from] anyhow::Error),
+}
 
 impl IntoResponse for BlueBadgeError {
     fn into_response(self) -> Response {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Something went wrong: {}", self.0),
+            format!("Something went wrong: {:?}", self),
         )
             .into_response()
     }
@@ -62,6 +76,7 @@ pub struct InnerWebContext {
     pub http_client: reqwest::Client,
     pub font: ttf_parser::Face<'static>,
     pub fontdb: Arc<fontdb::Database>,
+    pub supported_languages: Vec<LanguageIdentifier>,
 }
 
 impl Deref for WebContext {
@@ -109,6 +124,122 @@ pub mod embed_env {
         env.add_global("external_base", http_external.clone());
         minijinja_embed::load_templates!(&mut env);
         env
+    }
+}
+
+#[derive(Clone)]
+pub struct AcceptedLanguage {
+    pub value: String,
+    pub quality: f32,
+}
+
+impl Eq for AcceptedLanguage {}
+
+impl PartialEq for AcceptedLanguage {
+    fn eq(&self, other: &Self) -> bool {
+        self.quality == other.quality && self.value.eq(&other.value)
+    }
+}
+
+impl PartialOrd for AcceptedLanguage {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for AcceptedLanguage {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        if self.quality > other.quality {
+            std::cmp::Ordering::Greater
+        } else if self.quality < other.quality {
+            std::cmp::Ordering::Less
+        } else {
+            std::cmp::Ordering::Equal
+        }
+    }
+}
+
+impl FromStr for AcceptedLanguage {
+    type Err = BlueBadgeError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut value = s.trim().split(';');
+        let (value, quality) = (value.next(), value.next());
+
+        let Some(value) = value else {
+            return Err(BlueBadgeError::InvalidLanguage());
+        };
+
+        if value.is_empty() {
+            return Err(BlueBadgeError::InvalidLanguage());
+        }
+
+        let quality = if let Some(quality) = quality.and_then(|q| q.strip_prefix("q=")) {
+            quality.parse::<f32>().unwrap_or(0.0)
+        } else {
+            1.0
+        };
+
+        Ok(AcceptedLanguage {
+            value: value.to_string(),
+            quality,
+        })
+    }
+}
+
+pub struct Language(pub LanguageIdentifier);
+
+#[async_trait]
+impl<S> FromRequestParts<S> for Language
+where
+    WebContext: FromRef<S>,
+    S: Send + Sync,
+{
+    type Rejection = BlueBadgeError;
+
+    async fn from_request_parts(parts: &mut Parts, context: &S) -> Result<Self, Self::Rejection> {
+        let web_context = WebContext::from_ref(context);
+
+        let cookie_jar = CookieJar::from_headers(&parts.headers);
+
+        if let Some(lang_cookie) = cookie_jar.get("lang") {
+            for value_part in lang_cookie.value().split(',') {
+                tracing::debug!("lang cookie value part: {:?}", value_part);
+                if let Ok(value) = value_part.parse::<LanguageIdentifier>() {
+                    for lang in &web_context.supported_languages {
+                        if lang.matches(&value, true, false) {
+                            return Ok(Self(lang.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        let accept_languages = &mut parts
+            .headers
+            .get("accept-language")
+            .and_then(|header| header.to_str().ok())
+            .map(|header| {
+                header
+                    .split(',')
+                    .filter_map(|lang| lang.parse::<AcceptedLanguage>().ok())
+                    .collect::<Vec<AcceptedLanguage>>()
+            })
+            .unwrap_or_default();
+
+        accept_languages.sort();
+
+        for accept_language in accept_languages {
+            if let Ok(value) = accept_language.value.parse::<LanguageIdentifier>() {
+                tracing::debug!("accept language value part: {:?}", value);
+                for lang in &web_context.supported_languages {
+                    if lang.matches(&value, true, false) {
+                        return Ok(Self(lang.clone()));
+                    }
+                }
+            }
+        }
+
+        Ok(Self(web_context.supported_languages[0].clone()))
     }
 }
 
@@ -299,14 +430,16 @@ pub struct GetRecordResponse {
     pub value: RecordType,
 }
 
-#[axum::debug_handler]
 async fn handle_index(
     State(web_context): State<WebContext>,
+    Language(language): Language,
 ) -> Result<impl IntoResponse, BlueBadgeError> {
     Ok(RenderHtml(
         "index.html",
         web_context.engine.clone(),
-        template_context! {},
+        template_context! {
+            language => language.to_string(),
+        },
     )
     .into_response())
 }
@@ -743,8 +876,6 @@ fn render_error_svg(
     Ok(xml_buffer)
 }
 
-use std::collections::HashSet;
-
 fn render_award_svg(
     font: &ttf_parser::Face<'static>,
     raw_issuer_label: &str,
@@ -1132,7 +1263,40 @@ async fn handle_render_award_png(
     Ok((headers, badge_png).into_response())
 }
 
-const FONT_DATA: &[u8] = include_bytes!(env!("FONT_PATH"));
+#[derive(Deserialize, Clone)]
+pub struct LanguageForm {
+    pub language: String,
+}
+
+const COOKIE_LANG: &str = "lang";
+
+async fn handle_set_language(
+    State(web_context): State<WebContext>,
+    jar: CookieJar,
+    Form(language_form): Form<LanguageForm>,
+) -> Result<impl IntoResponse, BlueBadgeError> {
+    let use_language = LanguageIdentifier::from_str(&language_form.language)
+        .context(anyhow!("invalid language"))?;
+
+    let found = web_context
+        .supported_languages
+        .iter()
+        .find(|lang| lang.matches(&use_language, true, false));
+    if found.is_none() {
+        return Err(anyhow!("invalid language").into());
+    }
+    let found = found.unwrap();
+
+    let mut cookie = Cookie::new(COOKIE_LANG, found.to_string());
+    cookie.set_path("/");
+    cookie.set_http_only(true);
+    cookie.set_secure(true);
+    cookie.set_same_site(Some(SameSite::Lax));
+
+    let updated_jar = jar.add(cookie);
+
+    Ok((updated_jar, Redirect::to("/")).into_response())
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -1162,11 +1326,17 @@ async fn main() -> Result<()> {
     let mut font_database = fontdb::Database::new();
     font_database.load_font_data(FONT_DATA.to_vec());
 
+    let supported_languages = vec![
+        LanguageIdentifier::from_str("en")?,
+        LanguageIdentifier::from_str("pt_BR")?,
+    ];
+
     let web_context = WebContext(Arc::new(InnerWebContext {
         engine: Engine::from(jinja),
         http_client: reqwest::Client::new(),
         font,
         fontdb: Arc::new(font_database),
+        supported_languages,
     }));
 
     let serve_dir = ServeDir::new("static");
@@ -1175,6 +1345,7 @@ async fn main() -> Result<()> {
         .nest_service("/static", serve_dir.clone())
         .fallback_service(serve_dir)
         .route("/", get(handle_index))
+        .route("/language", post(handle_set_language))
         .route("/verify", get(handle_verify))
         .route("/render/badge", get(handle_render_award_png))
         .route("/render/badge.svg", get(handle_render_award_svg))
