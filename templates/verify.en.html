@@ -6,11 +6,36 @@
 {% endblock %}
 {% block content %}
     <section class="hero">
-        <div class="hero-body">
-            <p class="title">
-                <a href="/">Blue Badge</a> / Verify
-            </p>
-        </div>
+        <nav class="level">
+            <div class="level-left">
+                <div class="hero-body">
+                    <p class="title">Blue Badge</p>
+                    <p class="subtitle">Define, Issue, and Verify Badges for ATProtocol Handles.</p>
+                </div>
+            </div>
+            <div class="level-right">
+                <div class="level-item">
+                    <form method="post" action="/language">
+                        <input type="hidden" name="language" value="en">
+                        <div class="field">
+                            <p class="control">
+                                <button class="button is-ghost">&#127482;&#127480;</button>
+                            </p>
+                        </div>
+                    </form>
+                </div>
+                <div class="level-item">
+                    <form method="post" action="/language">
+                        <input type="hidden" name="language" value="pt_BR">
+                        <div class="field">
+                            <p class="control">
+                                <button class="button is-ghost">&#127463;&#127479;</button>
+                            </p>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </nav>
     </section>
     <section class="section pb-0">
         <form action="verify" method="get">
