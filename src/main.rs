@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use axum::{
     extract::{FromRef, FromRequestParts, Query, State},
-    http::{request::Parts, HeaderValue, Method, StatusCode},
+    http::{request::Parts, HeaderName, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
     Router,
@@ -47,6 +47,12 @@ use minijinja::Environment;
 pub(crate) type AppEngine = Engine<Environment<'static>>;
 
 const FONT_DATA: &[u8] = include_bytes!(env!("FONT_PATH"));
+
+const COOKIE_LANG: &str = "lang";
+const CONTENT_TYPE: HeaderName = HeaderName::from_static("content-type");
+const CACHE_CONTROL: HeaderName = HeaderName::from_static("cache-control");
+const CDN_CACHE_CONTROL: HeaderName = HeaderName::from_static("cdn-cache-control");
+const ETAG: HeaderName = HeaderName::from_static("etag");
 
 #[cfg(feature = "reload")]
 pub(crate) type AppEngine = Engine<AutoReloader>;
@@ -201,7 +207,7 @@ where
 
         let cookie_jar = CookieJar::from_headers(&parts.headers);
 
-        if let Some(lang_cookie) = cookie_jar.get("lang") {
+        if let Some(lang_cookie) = cookie_jar.get(COOKIE_LANG) {
             for value_part in lang_cookie.value().split(',') {
                 tracing::debug!("lang cookie value part: {:?}", value_part);
                 if let Ok(value) = value_part.parse::<LanguageIdentifier>() {
@@ -435,7 +441,7 @@ async fn handle_index(
     Language(language): Language,
 ) -> Result<impl IntoResponse, BlueBadgeError> {
     Ok(RenderHtml(
-        "index.html",
+        &format!("index.{}.html", language.to_string().to_lowercase()),
         web_context.engine.clone(),
         template_context! {
             language => language.to_string(),
@@ -651,15 +657,19 @@ async fn verify_badge(
 
 async fn handle_verify(
     State(web_context): State<WebContext>,
+    Language(language): Language,
     verify_request: Query<VerifyRequest>,
 ) -> Result<impl IntoResponse, BlueBadgeError> {
+    let template = format!("verify.{}.html", language.to_string().to_lowercase());
+
     let uri = verify_request.uri.clone();
 
     if uri.is_none() {
         return Ok(RenderHtml(
-            "verify.html",
+            &template,
             web_context.engine.clone(),
             template_context! {
+                language => language.to_string(),
                 messages => vec![Message::danger(None, "No uri query string parameter provided.")],
             },
         )
@@ -673,9 +683,10 @@ async fn handle_verify(
     if let Err(err) = verified_badge {
         tracing::error!("error verifying badge: {:?}", err);
         return Ok(RenderHtml(
-            "verify.html",
+            &template,
             web_context.engine.clone(),
             template_context! {
+                language => language.to_string(),
                 messages => vec![Message::danger(None, &format!("Unable to verify record: {}", err))],
                 uri
             },
@@ -685,12 +696,19 @@ async fn handle_verify(
 
     let verified_badge = verified_badge.unwrap();
 
+    let success_message = match template.as_str() {
+        "verify.pt-br.html" => "O registro é válido!",
+        _ => "Record is valid!",
+    };
+
     Ok(RenderHtml(
-        "verify.html",
+        &template,
         web_context.engine.clone(),
         template_context! {
-            messages => vec![Message::success(None, "Record is valid!")],
-            uri, verified_badge,
+            language => language.to_string(),
+            messages => vec![Message::success(None, success_message)],
+            uri,
+            verified_badge => verified_badge.record,
         },
     )
     .into_response())
@@ -1130,12 +1148,6 @@ fn render_award_svg(
     Ok(xml_buffer)
 }
 
-const CONTENT_TYPE: axum::http::HeaderName = axum::http::HeaderName::from_static("content-type");
-const CACHE_CONTROL: axum::http::HeaderName = axum::http::HeaderName::from_static("cache-control");
-const CDN_CACHE_CONTROL: axum::http::HeaderName =
-    axum::http::HeaderName::from_static("cdn-cache-control");
-const ETAG: axum::http::HeaderName = axum::http::HeaderName::from_static("etag");
-
 async fn handle_render_award_svg(
     State(web_context): State<WebContext>,
     verify_request: Query<VerifyRequest>,
@@ -1267,8 +1279,6 @@ async fn handle_render_award_png(
 pub struct LanguageForm {
     pub language: String,
 }
-
-const COOKIE_LANG: &str = "lang";
 
 async fn handle_set_language(
     State(web_context): State<WebContext>,

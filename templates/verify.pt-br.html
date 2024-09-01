@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Blue Badge - Verifiable Badges{% endblock %}
+{% block head %}
+    <meta name="description"
+          content="Blue Badge is a method for defining, issuing, and verifying badges on ATProtocol handles.">
+{% endblock %}
+{% block content %}
+    <section class="hero">
+        <div class="hero-body">
+            <p class="title">
+                <a href="/">Distintivo Azul</a> / Verificar
+            </p>
+        </div>
+    </section>
+    <section class="section pb-0">
+        <form action="verify" method="get">
+            <div class="field is-grouped">
+                <p class="control is-expanded">
+                    <input class="input"
+                           type="text"
+                           placeholder="at://did:plc:cbkjy5n7bk3ax2wplmtjofq2/blue.badge.collection/3l2npthykb226"
+                           name="uri"
+                           {% if uri %}value="{{ uri }}"{% endif %}
+                           required>
+                </p>
+                <p class="control">
+                    <button class="button is-info">
+                        <span class="icon">
+                            <i class="fas fa-certificate"></i>
+                        </span>
+                        <span>Verificar</span>
+                    </button>
+                </p>
+            </div>
+            <p class="help">
+            Use isto para verificar um emblema em um repositório @handle.
+                <span class="is-hidden-mobile">
+                    <code>at://did:plc:cbkjy5n7bk3ax2wplmtjofq2/blue.badge.collection/3l2npthykb226</code>
+                </span>
+            </p>
+        </form>
+    </section>
+    <section class="section">
+        {% for message in messages %}
+            <article class="message {{ message.style }}">
+                {% if message.header %}
+                    <div class="message-header">
+                        <p>{{ message.header }}</p>
+                    </div>
+                {% endif %}
+                <div class="message-body">{{ message.content }}</div>
+            </article>
+        {% endfor %}
+        {% if verified_badge %}<pre><code>{{ verified_badge | tojson(indent=2) }}</code></pre>{% endif %}
+    </section>
+{% endblock %}

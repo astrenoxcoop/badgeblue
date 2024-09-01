@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}Distintivo Azul - Verifiable Badges{% endblock %}
+{% block head %}
+    <meta name="description"
+          content="Blue Badge is a method for defining, issuing, and verifying badges on ATProtocol handles.">
+    <script type="application/ld+json">
+{ "@context" : "https://schema.org", "@type" : "Organization", "url" : "{{ external_base }}/", "name": "Blue Badge" }
+    </script>
+{% endblock %}
+{% block content %}
+    <section class="hero">
+        <nav class="level">
+            <div class="level-left">
+                <div class="hero-body">
+                    <p class="title">Distintivo Azul</p>
+                    <p class="subtitle">Definir, emitir e verificar emblemas para identificadores do ATProtocol.</p>
+                </div>
+            </div>
+            <div class="level-right">
+                <div class="level-item">
+                    <form method="post" action="/language">
+                        <input type="hidden" name="language" value="en">
+                        <div class="field">
+                            <p class="control">
+                                <button class="button is-ghost">🇺🇸</button>
+                            </p>
+                        </div>
+                    </form>
+                </div>
+                <div class="level-item">
+                    <form method="post" action="/language">
+                        <input type="hidden" name="language" value="pt_BR">
+                        <div class="field">
+                            <p class="control">
+                                <button class="button is-ghost">🇧🇷</button>
+                            </p>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </nav>
+    </section>
+    <section class="section pb-0">
+        <form action="verify" method="get">
+            <div class="field is-grouped">
+                <p class="control is-expanded">
+                    <input class="input"
+                           type="text"
+                           placeholder="at://did:plc:cbkjy5n7bk3ax2wplmtjofq2/blue.badge.collection/3l2npthykb226"
+                           name="uri"
+                           required>
+                </p>
+                <p class="control">
+                    <button class="button is-info">
+                        <span class="icon">
+                            <i class="fas fa-certificate"></i>
+                        </span>
+                        <span>Verify</span>
+                    </button>
+                </p>
+            </div>
+            <p class="help">
+                Use isto para verificar um emblema em um repositório @handle.
+                <span class="is-hidden-mobile">
+                    <code>at://did:plc:cbkjy5n7bk3ax2wplmtjofq2/blue.badge.collection/3l2npthykb226</code>
+                </span>
+            </p>
+        </form>
+    </section>
+    <section class="section content">
+        <h1 class="title">How Does This Work?</h1>
+        <p>
+            Primeiro, um emissor define um ou mais <code>blue.badge.definition</code> registros a serem emitidos:
+        </p>
+        <pre><code>{
+    "uri": "at://did:plc:puy52u7opoy3gvrv7h7qdy76/blue.badge.definition/6XXzn32gbU",
+    "cid": "bafyreifbq7wub6wfuntruagvaaivqsinxyc4mpbfagjka35v4wx7aeu3fe",
+    "value": {
+        "name": "Adventure Awaits!",
+        "text": "You're in for an adventure! Log in for the first time to https://atproto.camp/",
+        "$type": "blue.badge.definition"
+    }
+}</code></pre>
+        <p>
+          Com a permissão de um @handle (via OAuth), o emissor grava um
+          <code>blue.badge.award</code>
+          registro no repositório do @handle. Eles podem usar a
+          <code>blue.badge.collection</code>
+          coleção ou a sua própria.
+        </p>
+        <p>O registro de premiação contém informações básicas do distintivo, bem como uma assinatura criptográfica do distintivo:</p>
+        <pre><code>{
+    "$type": "blue.badge.award",
+    "badge": {
+        "cid": "bafyreifbq7wub6wfuntruagvaaivqsinxyc4mpbfagjka35v4wx7aeu3fe",
+        "description": "You\u0027re in for an adventure! Log in for the first time to https://atproto.camp/.",
+        "name": "Adventure Awaits!",
+        "uri": "at://did:plc:puy52u7opoy3gvrv7h7qdy76/blue.badge.definition/6XXzn32gbU"
+    },
+    "did": "did:plc:cbkjy5n7bk3ax2wplmtjofq2",
+    "issued": "2024-08-26T22:14:02.000Z",
+    "proof": {
+        "k": "https://atproto.camp/.well-known/jwks.json#01J67HHM2CCKT98FE20SKPR5EA",
+        "s": "2-EaPZELcvu5SL8lS863fta8moqLZcpKlrzFpn7RbUr_B37HZphJa642dJfGNM2BMZGl-YGQync-2pyhoPC4Wg=="
+    }
+}</code></pre>
+        <p>
+        Essa assinatura pode ser verificada por aplicativos e clientes usando a
+        chave de prova e a assinatura. A chave é uma URL para um JSON Web Key
+        Set com o Key Identifier no fragmento de URL. A assinatura é criada a
+        partir do registro de emblema codificado DAG-CBOR sem o elemento de
+        prova (apenas os elementos $type, did, badge e issued).
+        </p>
+    </section>
+    <section class="section content">
+        <h1 class="title">Badge Image Embedding</h1>
+        <p>
+        Os emblemas podem ser incorporados como imagens SVG usando a URL https://render.badge.blue/badge com o parâmetro de string de consulta `uri`:
+            <a rel="nofollow"
+               href="https://render.badge.blue/badge?uri=at://did:plc:cbkjy5n7bk3ax2wplmtjofq2/blue.badge.collection/3l2npthykb226">
+                https://render.badge.blue/badge?uri=at://did:plc:cbkjy5n7bk3ax2wplmtjofq2/blue.badge.collection/3l2npthykb226
+            </a>
+        </p>
+        <p>A imagem do emblema renderizada incluirá o identificador do emissor, o identificador do assunto e o título do emblema.</p>
+        <p>
+            <img src="https://render.badge.blue/badge?uri=at://did:plc:cbkjy5n7bk3ax2wplmtjofq2/blue.badge.collection/3l2npthykb226" />
+        </p>
+    </section>
+{% endblock %}
