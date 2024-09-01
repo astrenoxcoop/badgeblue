@@ -1,11 +1,10 @@
 {% extends "base.html" %}
-{% block title %}Distintivo Azul - Verifiable Badges{% endblock %}
+{% block title %}Distintivo Azul - Selos verificáveis{% endblock %}
 {% block head %}
-    <meta name="description"
-          content="Blue Badge is a method for defining, issuing, and verifying badges on ATProtocol handles.">
-    <script type="application/ld+json">
-{ "@context" : "https://schema.org", "@type" : "Organization", "url" : "{{ external_base }}/", "name": "Blue Badge" }
-    </script>
+<meta name="description" content="Distintivo Azul é um método para definir, emitir e verificar crachás em identificadores ATProtocol.">
+<script type="application/ld+json">
+{ "@context" : "https://schema.org", "@type" : "Organization", "url" : "{{ external_base }}/", "name": "Distintivo Azul" }
+</script>
 {% endblock %}
 {% block content %}
     <section class="hero">
@@ -68,7 +67,7 @@
         </form>
     </section>
     <section class="section content">
-        <h1 class="title">How Does This Work?</h1>
+        <h1 class="title">Como é que isso funciona?</h1>
         <p>
             Primeiro, um emissor define um ou mais <code>blue.badge.definition</code> registros a serem emitidos:
         </p>
@@ -113,7 +112,7 @@
         </p>
     </section>
     <section class="section content">
-        <h1 class="title">Badge Image Embedding</h1>
+        <h1 class="title">Incorporação de imagem de emblema</h1>
         <p>
         Os emblemas podem ser incorporados como imagens SVG usando a URL https://render.badge.blue/badge com o parâmetro de string de consulta `uri`:
             <a rel="nofollow"
