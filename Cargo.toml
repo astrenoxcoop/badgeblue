@@ -20,14 +20,19 @@ axum-extra = { version = "0.9.3", default-features = false, features = ["cookie"
 axum-template = { version = "2.4.0", features = ["minijinja", "minijinja-autoreload"] }
 base64 = { version = "0.22.1", default-features = false, features = ["alloc", "std"] }
 chrono = { version = "0.4.38", default-features = false, features = ["std", "alloc", "now"] }
+fluent = "0.16.1"
+fluent-bundle = "0.15.3"
+fluent-syntax = { version = "0.11.1", default-features = false }
 fontdb = "0.21.0"
 headers = { version = "0.4.0", default-features = false }
+intl-memoizer = { version = "0.5.2", default-features = false }
 minijinja = { version = "2.1.2", default-features = false, features = ["builtins", "deserialization", "json", "loader", "macros", "multi_template", "serde", "std_collections", "urlencode"] }
 minijinja-autoreload = { version = "2.1.2", default-features = false, optional = true, features = ["watch-fs"] }
 minijinja-embed = {version = "2.0.3", optional = true}
 p256 = { version = "0.13.2", default-features = false, features = ["alloc", "arithmetic", "digest", "ecdsa", "ecdsa-core", "jwk", "sha256"] }
 reqwest = { version = "0.12.7", default-features = false, features = ["http2", "json", "rustls-tls"] }
 resvg = "0.43.0"
+rust-embed = "8.5.0"
 serde = { version = "1.0.209", default-features = false, features = ["alloc", "derive", "rc", "std"] }
 serde_ipld_dagcbor = { version = "0.6.1", default-features = false, features = ["std"] }
 thiserror = "1.0.63"

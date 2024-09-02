@@ -11,6 +11,7 @@ use axum_extra::extract::{
     cookie::{Cookie, CookieJar, SameSite},
     Form,
 };
+use axum_template::engine::Engine;
 use axum_template::RenderHtml;
 use base64::{engine::general_purpose, Engine as _};
 use chrono::{DateTime, Utc};
@@ -19,7 +20,9 @@ use p256::{
     ecdsa::{signature::Verifier, Signature, VerifyingKey},
     elliptic_curve::JwkEcKey,
 };
+use rust_embed::Embed;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::str::FromStr;
 use std::{env, ops::Deref, sync::Arc, time::Duration};
@@ -30,12 +33,13 @@ use tower_http::services::ServeDir;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use ttf_parser::Face;
 use unic_langid::LanguageIdentifier;
 use xml_builder::{XMLBuilder, XMLElement};
 
-use ttf_parser::Face;
-
-use axum_template::engine::Engine;
+#[derive(Embed)]
+#[folder = "i18n/"]
+struct I18nAssets;
 
 #[cfg(feature = "reload")]
 use minijinja_autoreload::AutoReloader;
@@ -59,101 +63,119 @@ pub(crate) type AppEngine = Engine<AutoReloader>;
 
 #[derive(thiserror::Error, Debug)]
 pub enum BlueBadgeError {
-    #[error("ERROR-XXX Invalid Language")]
+    // ---
+    // Errors from localization selection and validation.
+    // ---
+    #[error("ERROR-300 Invalid Language")]
     InvalidLanguage(),
 
     // ---
     // Errors from AT-URI parsing and validation.
     // ---
-    #[error("ERROR-XXX AT-URI Invalid")]
+    #[error("ERROR-1000 AT-URI Invalid")]
     AtUriInvalid(),
 
-    #[error("ERROR-XXX AT-URI Missing DID")]
+    #[error("ERROR-1001 AT-URI Missing DID")]
     AtUriMissingDid(),
 
-    #[error("ERROR-XXX AT-URI Missing Collection")]
+    #[error("ERROR-1002 AT-URI Missing Collection")]
     AtUriMissingCollection(),
 
-    #[error("ERROR-XXX AT-URI Missing Record Key")]
+    #[error("ERROR-1003 AT-URI Missing Record Key")]
     AtUriMissingRecordKey(),
 
-    #[error("ERROR-XXX AT-URI Has Extra Components")]
+    #[error("ERROR-1004 AT-URI Has Extra Components")]
     AtUriHasExtraComponents(),
 
     // ---
     // Errors from DID validation.
     // ---
-    #[error("ERROR-XXX DID Invalid")]
+    #[error("ERROR-1101 DID Invalid")]
     DidInvalid(),
 
-    #[error("ERROR-XXX DID Method Unsupported")]
+    #[error("ERROR-1102 DID Method Unsupported")]
     DidMethodUnsupported(),
 
     // ---
     // Errors from NSID validation.
     // ---
-    #[error("ERROR-XXX Unsupported NSID")]
+    #[error("ERROR-1150 Unsupported NSID")]
     NsidUnsupported(),
 
     // ---
     // Errors from PLC requests.
     // ---
-    #[error("ERROR-XXX PLC Request Failed: {0:?}")]
+    #[error("ERROR-1200 PLC Request Failed: {0:?}")]
     PLCRequestFailed(reqwest::Error),
 
-    #[error("ERROR-XXX PLC Response Invalid: {0:?}")]
+    #[error("ERROR-1201 PLC Response Invalid: {0:?}")]
     PLCResponseInvalid(reqwest::Error),
 
-    #[error("ERROR-XXX PLC Response Missing Service")]
+    #[error("ERROR-1202 PLC Response Missing Service")]
     PLCResponseMissingService(),
 
     // ---
     // Errors from PDS get record requests.
     // ---
-    #[error("ERROR-XXX PDS Get Record Request Failed: {0:?}")]
+    #[error("ERROR-1210 PDS Get Record Request Failed: {0:?}")]
     PDSGetRecordRequestFailed(reqwest::Error),
 
-    #[error("ERROR-XXX PDS Get Record Response Invalid: {0:?}")]
+    #[error("ERROR-1211 PDS Get Record Response Invalid: {0:?}")]
     PDSGetRecordResponseInvalid(reqwest::Error),
 
-    #[error("ERROR-XXX JSON Web Key Set URL Invalid")]
+    // ---
+    // Errors from JSON Web Key Set requests and validation.
+    // ---
+    #[error("ERROR-1300 JSON Web Key Set URL Invalid")]
     JWKSURLInvalid(),
 
-    #[error("ERROR-XXX JSON Web Key Set URL Not Authentic")]
+    #[error("ERROR-1301 JSON Web Key Set URL Not Authentic")]
     JWKSURLNotAuthentic(),
 
-    #[error("ERROR-XXX JSON Web Key Set URL Request Failed: {0:?}")]
+    #[error("ERROR-1302 JSON Web Key Set URL Request Failed: {0:?}")]
     JWKSRequestFailed(reqwest::Error),
 
-    #[error("ERROR-XXX JSON Web Key Set URL Response Invalid: {0:?}")]
+    #[error("ERROR-1303 JSON Web Key Set URL Response Invalid: {0:?}")]
     JWKSResponseInvalid(reqwest::Error),
 
-    #[error("ERROR-XXX JSON Web Key Set URL Response Missing Keys")]
+    #[error("ERROR-1304 JSON Web Key Set URL Response Missing Keys")]
     JWKSResponseMissingKeys(),
 
-    #[error("ERROR-XXX Secret Key From JWK Failed: {0:?}")]
+    #[error("ERROR-1305 Secret Key From JWK Failed: {0:?}")]
     SecretKeyFromJWKFailed(p256::elliptic_curve::Error),
 
-    #[error("ERROR-XXX Record Proof Missing")]
+    // ---
+    // Errors from record validation.
+    // ---
+    #[error("ERROR-1400 Record Proof Missing")]
     RecordProofMissing(),
 
-    #[error("ERROR-XXX Record Proof Key ID Mismatch")]
+    #[error("ERROR-1401 Record Proof Key ID Mismatch")]
     RecordProofKeyIDMismatch(),
 
-    #[error("ERROR-XXX Record Serialization Failed: {0:?}")]
+    #[error("ERROR-1402 Record Serialization Failed: {0:?}")]
     RecordSerializationFailed(serde_ipld_dagcbor::EncodeError<std::collections::TryReserveError>),
 
-    #[error("XXX Base64 decoding failed: {0:?}")]
-    Base64DecodeFailed(base64::DecodeError),
-
-    #[error("XXX Base64 decoding failed: {0:?}")]
-    Base64DecodeSliceFailed(base64::DecodeSliceError),
-
-    #[error("XXX Failed to create signature: {0:?}")]
+    #[error("ERROR-1403 Failed to create signature: {0:?}")]
     P256SignFailed(p256::ecdsa::Error),
 
-    #[error("XXX Failed to verify signature: {0:?}")]
+    #[error("ERROR-1404 Failed to verify signature: {0:?}")]
     P256VerifyFailed(p256::ecdsa::Error),
+
+    // ---
+    // Errors from base64 decoding and encoding.
+    // ---
+    #[error("ERROR-1500 Base64 decoding failed: {0:?}")]
+    Base64DecodeFailed(base64::DecodeError),
+
+    #[error("ERROR-1501 Base64 decoding failed: {0:?}")]
+    Base64DecodeSliceFailed(base64::DecodeSliceError),
+
+    #[error("ERROR-1600 Language resource processing failed: {0:?}")]
+    LanguageResourceFailed(Vec<fluent_syntax::parser::ParserError>),
+
+    #[error("ERROR-1601 Language bundle processing failed: {0:?}")]
+    BundleLoadFailed(Vec<fluent::FluentError>),
 
     #[error("ERROR-0 Unhandled Error: {0:?}")]
     Anyhow(#[from] anyhow::Error),
@@ -192,12 +214,81 @@ impl IntoResponse for BlueBadgeError {
     }
 }
 
+use fluent::{bundle::FluentBundle, FluentResource};
+
+type Bundle = FluentBundle<FluentResource, intl_memoizer::concurrent::IntlLangMemoizer>;
+
+struct Locales(HashMap<LanguageIdentifier, Bundle>);
+
+impl Locales {
+    fn new(locales: Vec<LanguageIdentifier>) -> Self {
+        let mut store = HashMap::new();
+        for locale in &locales {
+            let bundle: FluentBundle<FluentResource, intl_memoizer::concurrent::IntlLangMemoizer> =
+                FluentBundle::new_concurrent(vec![locale.clone()]);
+            store.insert(locale.clone(), bundle);
+        }
+        Self(store)
+    }
+
+    fn add_bundle(
+        &mut self,
+        locale: LanguageIdentifier,
+        content: String,
+    ) -> Result<(), BlueBadgeError> {
+        let bundle = self
+            .0
+            .get_mut(&locale)
+            .ok_or(BlueBadgeError::InvalidLanguage())?;
+
+        let resource = FluentResource::try_new(content)
+            .map_err(|(_, errors)| BlueBadgeError::LanguageResourceFailed(errors))?;
+
+        bundle
+            .add_resource(resource)
+            .map_err(BlueBadgeError::BundleLoadFailed)?;
+
+        Ok(())
+    }
+
+    fn format_error(&self, locale: &LanguageIdentifier, err: BlueBadgeError) -> String {
+        let bundle = self.0.get(locale);
+        if bundle.is_none() {
+            return err.partial();
+        }
+
+        let bundle = bundle.unwrap();
+
+        let bare = err.bare();
+
+        let bundle_message = bundle.get_message(&bare);
+
+        if bundle_message.is_none() {
+            return err.partial();
+        }
+
+        let bundle_message = bundle_message.unwrap();
+
+        let mut errors = Vec::new();
+
+        if bundle_message.value().is_none() {
+            return err.partial();
+        }
+        let bundle_message_value = bundle_message.value().unwrap();
+
+        let formatted_pattern = bundle.format_pattern(bundle_message_value, None, &mut errors);
+
+        formatted_pattern.to_string()
+    }
+}
+
 struct InnerWebContext {
     engine: AppEngine,
     http_client: reqwest::Client,
     font: ttf_parser::Face<'static>,
     fontdb: Arc<fontdb::Database>,
     supported_languages: Vec<LanguageIdentifier>,
+    locales: Locales,
 }
 
 impl Deref for WebContext {
@@ -797,12 +888,16 @@ async fn handle_verify(
 
     if let Err(err) = verified_badge {
         tracing::error!("error verifying badge: {:?}", err);
+
+        let message = web_context.locales.format_error(&language, err);
+
         return Ok(RenderHtml(
             &template,
             web_context.engine.clone(),
             template_context! {
                 language => language.to_string(),
-                messages => vec![Message::danger(None, &format!("Unable to verify record: {}", err))],
+                messages => vec![Message::danger(None, &message)],
+                // messages => vec![Message::danger(None, &format!("Unable to verify record: {}", err))],
                 uri
             },
         )
@@ -1423,6 +1518,8 @@ async fn handle_set_language(
     Ok((updated_jar, Redirect::to("/")).into_response())
 }
 
+// use fluent_bundle::{FluentArgs, FluentBundle, FluentResource, FluentValue};
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::registry()
@@ -1453,8 +1550,22 @@ async fn main() -> Result<()> {
 
     let supported_languages = vec![
         LanguageIdentifier::from_str("en")?,
-        LanguageIdentifier::from_str("pt_BR")?,
+        LanguageIdentifier::from_str("pt-BR")?,
     ];
+
+    let mut locales = Locales::new(supported_languages.clone());
+
+    for supported_language in &supported_languages {
+        let i18n_asset = I18nAssets::get(&format!("{}/errors.ftl", supported_language))
+            .expect("missing errors.ftl");
+
+        let errors_content =
+            std::str::from_utf8(i18n_asset.data.as_ref()).expect("invalid utf-8 data");
+
+        locales
+            .add_bundle(supported_language.clone(), errors_content.to_string())
+            .expect("unable to add bundle");
+    }
 
     let web_context = WebContext(Arc::new(InnerWebContext {
         engine: Engine::from(jinja),
@@ -1462,6 +1573,7 @@ async fn main() -> Result<()> {
         font,
         fontdb: Arc::new(font_database),
         supported_languages,
+        locales,
     }));
 
     let serve_dir = ServeDir::new("static");
