@@ -9,6 +9,7 @@ RUN mkdir -p /app/
 WORKDIR /app/
 
 RUN --mount=type=bind,source=src,target=src \
+    --mount=type=bind,source=i18n,target=i18n \
     --mount=type=bind,source=static,target=static \
     --mount=type=bind,source=templates,target=templates \
     --mount=type=bind,source=build.rs,target=build.rs \
