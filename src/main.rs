@@ -58,19 +58,135 @@ const ETAG: HeaderName = HeaderName::from_static("etag");
 pub(crate) type AppEngine = Engine<AutoReloader>;
 
 #[derive(thiserror::Error, Debug)]
- pub enum BlueBadgeError {
-    #[error("ERR-XXX Invalid Language")]
+pub enum BlueBadgeError {
+    #[error("ERROR-XXX Invalid Language")]
     InvalidLanguage(),
 
-    #[error("An error occurred: {0}")]
+    // ---
+    // Errors from AT-URI parsing and validation.
+    // ---
+    #[error("ERROR-XXX AT-URI Invalid")]
+    AtUriInvalid(),
+
+    #[error("ERROR-XXX AT-URI Missing DID")]
+    AtUriMissingDid(),
+
+    #[error("ERROR-XXX AT-URI Missing Collection")]
+    AtUriMissingCollection(),
+
+    #[error("ERROR-XXX AT-URI Missing Record Key")]
+    AtUriMissingRecordKey(),
+
+    #[error("ERROR-XXX AT-URI Has Extra Components")]
+    AtUriHasExtraComponents(),
+
+    // ---
+    // Errors from DID validation.
+    // ---
+    #[error("ERROR-XXX DID Invalid")]
+    DidInvalid(),
+
+    #[error("ERROR-XXX DID Method Unsupported")]
+    DidMethodUnsupported(),
+
+    // ---
+    // Errors from NSID validation.
+    // ---
+    #[error("ERROR-XXX Unsupported NSID")]
+    NsidUnsupported(),
+
+    // ---
+    // Errors from PLC requests.
+    // ---
+    #[error("ERROR-XXX PLC Request Failed: {0:?}")]
+    PLCRequestFailed(reqwest::Error),
+
+    #[error("ERROR-XXX PLC Response Invalid: {0:?}")]
+    PLCResponseInvalid(reqwest::Error),
+
+    #[error("ERROR-XXX PLC Response Missing Service")]
+    PLCResponseMissingService(),
+
+    // ---
+    // Errors from PDS get record requests.
+    // ---
+    #[error("ERROR-XXX PDS Get Record Request Failed: {0:?}")]
+    PDSGetRecordRequestFailed(reqwest::Error),
+
+    #[error("ERROR-XXX PDS Get Record Response Invalid: {0:?}")]
+    PDSGetRecordResponseInvalid(reqwest::Error),
+
+    #[error("ERROR-XXX JSON Web Key Set URL Invalid")]
+    JWKSURLInvalid(),
+
+    #[error("ERROR-XXX JSON Web Key Set URL Not Authentic")]
+    JWKSURLNotAuthentic(),
+
+    #[error("ERROR-XXX JSON Web Key Set URL Request Failed: {0:?}")]
+    JWKSRequestFailed(reqwest::Error),
+
+    #[error("ERROR-XXX JSON Web Key Set URL Response Invalid: {0:?}")]
+    JWKSResponseInvalid(reqwest::Error),
+
+    #[error("ERROR-XXX JSON Web Key Set URL Response Missing Keys")]
+    JWKSResponseMissingKeys(),
+
+    #[error("ERROR-XXX Secret Key From JWK Failed: {0:?}")]
+    SecretKeyFromJWKFailed(p256::elliptic_curve::Error),
+
+    #[error("ERROR-XXX Record Proof Missing")]
+    RecordProofMissing(),
+
+    #[error("ERROR-XXX Record Proof Key ID Mismatch")]
+    RecordProofKeyIDMismatch(),
+
+    #[error("ERROR-XXX Record Serialization Failed: {0:?}")]
+    RecordSerializationFailed(serde_ipld_dagcbor::EncodeError<std::collections::TryReserveError>),
+
+    #[error("XXX Base64 decoding failed: {0:?}")]
+    Base64DecodeFailed(base64::DecodeError),
+
+    #[error("XXX Base64 decoding failed: {0:?}")]
+    Base64DecodeSliceFailed(base64::DecodeSliceError),
+
+    #[error("XXX Failed to create signature: {0:?}")]
+    P256SignFailed(p256::ecdsa::Error),
+
+    #[error("XXX Failed to verify signature: {0:?}")]
+    P256VerifyFailed(p256::ecdsa::Error),
+
+    #[error("ERROR-0 Unhandled Error: {0:?}")]
     Anyhow(#[from] anyhow::Error),
+}
+
+impl BlueBadgeError {
+    fn bare(&self) -> String {
+        self.to_string()
+            .split_once(' ')
+            .unwrap_or_default()
+            .0
+            .to_string()
+    }
+
+    /// Returns a message that includes the prefix and formatted error string before any dynamic
+    /// information is included.
+    /// input: "ERROR-XXX Invalid Language: Foo bar baz"
+    /// output: "ERROR-XXX Invalid Language"
+    fn partial(&self) -> String {
+        self.to_string()
+            .split_once(':')
+            .unwrap_or_default()
+            .0
+            .to_string()
+    }
 }
 
 impl IntoResponse for BlueBadgeError {
     fn into_response(self) -> Response {
+        let partial = self.partial();
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Something went wrong: {:?}", self),
+            format!("Internal Server Error: {}", partial),
         )
             .into_response()
     }
@@ -96,13 +212,13 @@ impl Deref for WebContext {
 struct WebContext(Arc<InnerWebContext>);
 
 #[cfg(feature = "reload")]
-pub (crate) mod reload_env {
+pub(crate) mod reload_env {
     use std::path::PathBuf;
 
     use minijinja::{path_loader, Environment};
     use minijinja_autoreload::AutoReloader;
 
-    pub (crate) fn build_env(http_external: &str) -> AutoReloader {
+    pub(crate) fn build_env(http_external: &str) -> AutoReloader {
         let http_external = http_external.to_string();
         AutoReloader::new(move |notifier| {
             let template_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates");
@@ -119,10 +235,10 @@ pub (crate) mod reload_env {
 }
 
 #[cfg(feature = "embed")]
-pub (crate) mod embed_env {
+pub(crate) mod embed_env {
     use minijinja::Environment;
 
-    pub (crate) fn build_env(http_external: String) -> Environment<'static> {
+    pub(crate) fn build_env(http_external: String) -> Environment<'static> {
         let mut env = Environment::new();
         env.set_trim_blocks(true);
         env.set_lstrip_blocks(true);
@@ -284,37 +400,46 @@ struct ResolveDid {
     service: Vec<PlcService>,
 }
 
-fn split_at_uri(uri: &str) -> Result<[&str; 3]> {
+fn split_at_uri(uri: &str) -> Result<[&str; 3], BlueBadgeError> {
     let stripped = uri.strip_prefix("at://");
     if stripped.is_none() {
-        return Err(anyhow!("invalid URI"));
+        return Err(BlueBadgeError::AtUriInvalid());
     }
     let uri: &str = stripped.unwrap();
 
     let mut components = uri.split('/');
-    let did = components.next().ok_or(anyhow!("missing did"))?;
+    let did = components.next().ok_or(BlueBadgeError::AtUriMissingDid())?;
 
     validate_did(did)?;
 
-    let collection = components.next().ok_or(anyhow!("missing collection"))?;
+    let collection = components.next().ok_or(BlueBadgeError::AtUriMissingDid())?;
 
-    let rkey = components.next().ok_or(anyhow!("missing rkey"))?;
+    let rkey = components
+        .next()
+        .ok_or(BlueBadgeError::AtUriMissingRecordKey())?;
 
     if components.next().is_some() {
-        return Err(anyhow!("unexpected URI components"));
+        return Err(BlueBadgeError::AtUriHasExtraComponents());
     }
 
     Ok([did, collection, rkey])
 }
 
-fn validate_did(did: &str) -> Result<()> {
+fn validate_did(did: &str) -> Result<(), BlueBadgeError> {
+    if !did.starts_with("did:") {
+        Err(BlueBadgeError::DidInvalid())?;
+    }
+
     if !did.starts_with("did:plc:") {
-        Err(anyhow!("Only PLC DIDs are supported at this time."))?;
+        Err(BlueBadgeError::DidMethodUnsupported())?;
     }
     Ok(())
 }
 
-async fn pds_for_did(http_client: reqwest::Client, did: &str) -> Result<(String, Vec<String>)> {
+async fn pds_for_did(
+    http_client: reqwest::Client,
+    did: &str,
+) -> Result<(String, Vec<String>), BlueBadgeError> {
     let destination = format!("https://plc.directory/{}", did);
     tracing::debug!("GET: {:?}", destination);
 
@@ -323,16 +448,16 @@ async fn pds_for_did(http_client: reqwest::Client, did: &str) -> Result<(String,
         .timeout(Duration::from_secs(2))
         .send()
         .await
-        .context(anyhow!("error getting DID info from PDS"))?
+        .map_err(BlueBadgeError::PLCRequestFailed)?
         .json()
         .await
-        .context(anyhow!("parsing DID info from PDS"))?;
+        .map_err(BlueBadgeError::PLCResponseInvalid)?;
 
     let service_endpoint = did_content
         .service
         .first()
         .map(|service| service.service_endpoint.clone())
-        .ok_or_else(|| anyhow!("DID has no PDS records"))?;
+        .ok_or_else(BlueBadgeError::PLCResponseMissingService)?;
 
     let mut good_prefixes = vec![];
 
@@ -347,7 +472,7 @@ async fn pds_for_did(http_client: reqwest::Client, did: &str) -> Result<(String,
     Ok((service_endpoint, good_prefixes))
 }
 
-pub (crate) mod datetime_format {
+pub(crate) mod datetime_format {
     use chrono::{DateTime, SecondsFormat, Utc};
     use serde::{self, Deserialize, Deserializer, Serializer};
 
@@ -445,9 +570,13 @@ type QueryParam<'a> = (&'a str, &'a str);
 type QueryParams<'a> = Vec<QueryParam<'a>>;
 
 fn stringify(query: QueryParams) -> String {
-    query.iter().fold(String::new(), |acc, &tuple| {
-        acc + tuple.0 + "=" + tuple.1 + "&"
-    })
+    query
+        .iter()
+        .fold(String::new(), |acc, &tuple| {
+            acc + tuple.0 + "=" + tuple.1 + "&"
+        })
+        .trim_end_matches('&')
+        .to_string()
 }
 
 async fn get_record(
@@ -456,7 +585,7 @@ async fn get_record(
     did: &str,
     collection: &str,
     rkey: &str,
-) -> Result<GetRecordResponse> {
+) -> Result<GetRecordResponse, BlueBadgeError> {
     let args = vec![("repo", did), ("collection", collection), ("rkey", rkey)];
     let destination = format!(
         "{}/xrpc/com.atproto.repo.getRecord?{}",
@@ -464,17 +593,15 @@ async fn get_record(
         stringify(args)
     );
 
-    tracing::debug!("GET: {:?}", destination);
-
     http_client
         .get(destination)
         .timeout(Duration::from_secs(2))
         .send()
         .await
-        .context(anyhow!("error getting DID info from PDS"))?
+        .map_err(BlueBadgeError::PDSGetRecordRequestFailed)?
         .json()
         .await
-        .context(anyhow!("parsing DID info from PDS"))
+        .map_err(BlueBadgeError::PDSGetRecordResponseInvalid)
 }
 
 #[derive(Deserialize, Clone)]
@@ -500,75 +627,70 @@ async fn public_key_for_jwk_uri(
     http_client: reqwest::Client,
     jwk_url: &str,
     good_prefixes: &Vec<String>,
-) -> Result<p256::PublicKey> {
+) -> Result<p256::PublicKey, BlueBadgeError> {
     let (destination, key_id) = jwk_url
         .split_once('#')
-        .context(anyhow!("invalid JWK URL"))?;
+        .ok_or(BlueBadgeError::JWKSURLInvalid())?;
 
     if !good_prefixes
         .iter()
         .any(|prefix| destination.starts_with(prefix))
     {
-        return Err(anyhow!(
-            "jwk url does not match any prefix: {:?}",
-            good_prefixes
-        ));
+        return Err(BlueBadgeError::JWKSURLNotAuthentic());
     }
-
-    tracing::debug!("GET: {:?}", destination);
 
     let jwks: WrappedJsonWebKeySet = http_client
         .get(destination)
         .timeout(Duration::from_secs(2))
         .send()
         .await
-        .context(anyhow!("error getting DID info from PDS"))?
+        .map_err(BlueBadgeError::JWKSRequestFailed)?
         .json()
         .await
-        .context(anyhow!("parsing DID info from PDS"))?;
+        .map_err(BlueBadgeError::JWKSResponseInvalid)?;
 
     let found_key = jwks
         .keys
         .iter()
         .find(|k| k.kid.as_deref() == Some(key_id))
-        .ok_or(anyhow!("key not found"))?
+        .ok_or(BlueBadgeError::JWKSResponseMissingKeys())?
         .clone();
 
-    p256::PublicKey::from_jwk(&found_key.jwk).map_err(|err| anyhow!("invalid JWK: {:?}", err))
+    p256::PublicKey::from_jwk(&found_key.jwk).map_err(BlueBadgeError::SecretKeyFromJWKFailed)
 }
 
 fn verify_badge_signature(
     key_id: &str,
     public_key: &p256::PublicKey,
     badge: &Award,
-) -> Result<()> {
+) -> Result<(), BlueBadgeError> {
     let proof = badge
         .proof
         .clone()
-        .ok_or_else(|| anyhow!("signature is missing"))?;
+        .ok_or_else(BlueBadgeError::RecordProofMissing)?;
 
     if proof.key != key_id {
-        return Err(anyhow!("key_id does not match"));
+        return Err(BlueBadgeError::RecordProofKeyIDMismatch());
     }
 
     let mut scrubbed_badge = badge.clone();
     scrubbed_badge.proof = None;
 
     let serialized_badge = serde_ipld_dagcbor::to_vec(&AwardWrapper::Award(scrubbed_badge))
-        .context(anyhow!("unable to serialize award"))?;
+        .map_err(BlueBadgeError::RecordSerializationFailed)?;
 
     let verifying_key = VerifyingKey::from(public_key);
 
     let decoded_signature = general_purpose::URL_SAFE
         .decode(proof.signature)
-        .context(anyhow!("unable to base64 decode award proof signature"))?;
+        .map_err(BlueBadgeError::Base64DecodeFailed)?;
 
-    let p256_signature = Signature::from_slice(&decoded_signature)
-        .map_err(|err| anyhow!("unable to create signature: {:?}", err))?;
+    let p256_signature =
+        Signature::from_slice(&decoded_signature).map_err(BlueBadgeError::P256VerifyFailed)?;
 
     verifying_key
         .verify(&serialized_badge, &p256_signature)
-        .map_err(|err| anyhow!("signature verification failed: {:?}", err))?;
+        .map_err(BlueBadgeError::P256VerifyFailed)?;
 
     Ok(())
 }
@@ -603,17 +725,17 @@ async fn verify_badge(
     let RecordType::Award(AwardWrapper::Award(award)) = record.value.clone();
 
     if award.proof.is_none() {
-        return Err(anyhow!("record has no proof").into());
+        return Err(BlueBadgeError::RecordProofMissing());
     }
 
     let [issuer_did, badge_collection, _] = split_at_uri(&award.badge.uri)?;
 
     if validate_did(issuer_did).is_err() {
-        return Err(anyhow!("invalid badge DID").into());
+        return Err(BlueBadgeError::DidInvalid());
     }
 
     if badge_collection != "blue.badge.definition" {
-        return Err(anyhow!("invalid badge collection").into());
+        return Err(BlueBadgeError::NsidUnsupported());
     }
 
     let (_, issuer_handles) = pds_for_did(http_client.clone(), issuer_did).await?;
