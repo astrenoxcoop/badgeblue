@@ -15,6 +15,7 @@ use axum_template::engine::Engine;
 use axum_template::RenderHtml;
 use base64::{engine::general_purpose, Engine as _};
 use chrono::{DateTime, Utc};
+use fluent::{bundle::FluentBundle, FluentResource};
 use minijinja::context as template_context;
 use p256::{
     ecdsa::{signature::Verifier, Signature, VerifyingKey},
@@ -171,12 +172,18 @@ pub enum BlueBadgeError {
     #[error("ERROR-1501 Base64 decoding failed: {0:?}")]
     Base64DecodeSliceFailed(base64::DecodeSliceError),
 
+    // ---
+    // Errors from fluent.
+    // ---
     #[error("ERROR-1600 Language resource processing failed: {0:?}")]
     LanguageResourceFailed(Vec<fluent_syntax::parser::ParserError>),
 
     #[error("ERROR-1601 Language bundle processing failed: {0:?}")]
     BundleLoadFailed(Vec<fluent::FluentError>),
 
+    // ---
+    // The catch-all.
+    // ---
     #[error("ERROR-0 Unhandled Error: {0:?}")]
     Anyhow(#[from] anyhow::Error),
 }
@@ -213,8 +220,6 @@ impl IntoResponse for BlueBadgeError {
             .into_response()
     }
 }
-
-use fluent::{bundle::FluentBundle, FluentResource};
 
 type Bundle = FluentBundle<FluentResource, intl_memoizer::concurrent::IntlLangMemoizer>;
 
@@ -527,6 +532,7 @@ fn validate_did(did: &str) -> Result<(), BlueBadgeError> {
     Ok(())
 }
 
+#[tracing::instrument(skip_all, err)]
 async fn pds_for_did(
     http_client: reqwest::Client,
     did: &str,
@@ -643,6 +649,7 @@ struct GetRecordResponse {
     value: RecordType,
 }
 
+#[tracing::instrument(skip_all, err)]
 async fn handle_index(
     State(web_context): State<WebContext>,
     Language(language): Language,
@@ -670,6 +677,7 @@ fn stringify(query: QueryParams) -> String {
         .to_string()
 }
 
+#[tracing::instrument(skip_all, err)]
 async fn get_record(
     http_client: reqwest::Client,
     pds: &str,
@@ -714,10 +722,11 @@ struct WrappedJsonWebKeySet {
     keys: Vec<WrappedJsonWebKey>,
 }
 
+#[tracing::instrument(skip_all, err)]
 async fn public_key_for_jwk_uri(
     http_client: reqwest::Client,
     jwk_url: &str,
-    good_prefixes: &Vec<String>,
+    good_prefixes: &[String],
 ) -> Result<p256::PublicKey, BlueBadgeError> {
     let (destination, key_id) = jwk_url
         .split_once('#')
@@ -750,6 +759,7 @@ async fn public_key_for_jwk_uri(
     p256::PublicKey::from_jwk(&found_key.jwk).map_err(BlueBadgeError::SecretKeyFromJWKFailed)
 }
 
+#[tracing::instrument(skip_all, err)]
 fn verify_badge_signature(
     key_id: &str,
     public_key: &p256::PublicKey,
@@ -803,6 +813,7 @@ struct VerifiedBadge {
     record: GetRecordResponse,
 }
 
+#[tracing::instrument(skip_all, err)]
 async fn verify_badge(
     http_client: reqwest::Client,
     uri: &str,
@@ -861,6 +872,7 @@ async fn verify_badge(
     })
 }
 
+#[tracing::instrument(skip_all, err)]
 async fn handle_verify(
     State(web_context): State<WebContext>,
     Language(language): Language,
@@ -924,6 +936,7 @@ async fn handle_verify(
     .into_response())
 }
 
+#[tracing::instrument(skip_all)]
 fn face_text_size(face: &Face, text: &str, font_size: f32) -> (f32, f32) {
     let units_per_em = face.units_per_em() as f32;
     let scale_factor = font_size / units_per_em;
@@ -951,6 +964,7 @@ fn truncate(s: &str, max_chars: usize) -> &str {
     }
 }
 
+#[tracing::instrument(skip_all, err)]
 fn render_error_svg(
     font: &ttf_parser::Face<'static>,
     raw_message: &str,
@@ -1104,6 +1118,7 @@ fn render_error_svg(
     Ok(xml_buffer)
 }
 
+#[tracing::instrument(skip_all, err)]
 fn render_award_svg(
     font: &ttf_parser::Face<'static>,
     raw_issuer_label: &str,
@@ -1358,6 +1373,7 @@ fn render_award_svg(
     Ok(xml_buffer)
 }
 
+#[tracing::instrument(skip_all, err)]
 async fn handle_render_award_svg(
     State(web_context): State<WebContext>,
     verify_request: Query<VerifyRequest>,
@@ -1413,6 +1429,7 @@ async fn handle_render_award_svg(
     Ok((headers, badge_svg).into_response())
 }
 
+#[tracing::instrument(skip_all, err)]
 async fn handle_render_award_png(
     State(web_context): State<WebContext>,
     verify_request: Query<VerifyRequest>,
@@ -1490,6 +1507,7 @@ struct LanguageForm {
     language: String,
 }
 
+#[tracing::instrument(skip_all, err)]
 async fn handle_set_language(
     State(web_context): State<WebContext>,
     jar: CookieJar,
@@ -1517,8 +1535,6 @@ async fn handle_set_language(
 
     Ok((updated_jar, Redirect::to("/")).into_response())
 }
-
-// use fluent_bundle::{FluentArgs, FluentBundle, FluentResource, FluentValue};
 
 #[tokio::main]
 async fn main() -> Result<()> {

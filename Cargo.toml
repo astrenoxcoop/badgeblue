@@ -40,7 +40,7 @@ tiny-skia = "0.11.4"
 tokio = { version = "1.39.3", default-features = false, features = ["rt", "net", "rt-multi-thread", "signal", "signal-hook-registry"] }
 tower = { version = "0.5.0", default-features = false, features = ["timeout", "tracing"] }
 tower-http = { version = "0.5.2", default-features = false, features = ["cors", "fs", "timeout", "trace", "tracing"] }
-tracing = { version = "0.1.40", default-features = false, features = ["async-await", "log", "std"] }
+tracing = { version = "0.1.40", default-features = false, features = ["async-await", "attributes", "log", "std"] }
 tracing-subscriber = { version = "0.3.18", default-features = false, features = ["env-filter", "fmt", "registry", "std"] }
 ttf-parser = "0.24.1"
 unic-langid = { version = "0.9.5", default-features = false }
