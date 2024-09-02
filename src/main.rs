@@ -57,9 +57,8 @@ const ETAG: HeaderName = HeaderName::from_static("etag");
 #[cfg(feature = "reload")]
 pub(crate) type AppEngine = Engine<AutoReloader>;
 
-// Make our own error that wraps `anyhow::Error`.
 #[derive(thiserror::Error, Debug)]
-pub enum BlueBadgeError {
+ pub enum BlueBadgeError {
     #[error("ERR-XXX Invalid Language")]
     InvalidLanguage(),
 
@@ -77,12 +76,12 @@ impl IntoResponse for BlueBadgeError {
     }
 }
 
-pub struct InnerWebContext {
-    pub engine: AppEngine,
-    pub http_client: reqwest::Client,
-    pub font: ttf_parser::Face<'static>,
-    pub fontdb: Arc<fontdb::Database>,
-    pub supported_languages: Vec<LanguageIdentifier>,
+struct InnerWebContext {
+    engine: AppEngine,
+    http_client: reqwest::Client,
+    font: ttf_parser::Face<'static>,
+    fontdb: Arc<fontdb::Database>,
+    supported_languages: Vec<LanguageIdentifier>,
 }
 
 impl Deref for WebContext {
@@ -94,16 +93,16 @@ impl Deref for WebContext {
 }
 
 #[derive(Clone, FromRef)]
-pub struct WebContext(pub Arc<InnerWebContext>);
+struct WebContext(Arc<InnerWebContext>);
 
 #[cfg(feature = "reload")]
-pub mod reload_env {
+pub (crate) mod reload_env {
     use std::path::PathBuf;
 
     use minijinja::{path_loader, Environment};
     use minijinja_autoreload::AutoReloader;
 
-    pub fn build_env(http_external: &str) -> AutoReloader {
+    pub (crate) fn build_env(http_external: &str) -> AutoReloader {
         let http_external = http_external.to_string();
         AutoReloader::new(move |notifier| {
             let template_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates");
@@ -120,10 +119,10 @@ pub mod reload_env {
 }
 
 #[cfg(feature = "embed")]
-pub mod embed_env {
+pub (crate) mod embed_env {
     use minijinja::Environment;
 
-    pub fn build_env(http_external: String) -> Environment<'static> {
+    pub (crate) fn build_env(http_external: String) -> Environment<'static> {
         let mut env = Environment::new();
         env.set_trim_blocks(true);
         env.set_lstrip_blocks(true);
@@ -134,9 +133,9 @@ pub mod embed_env {
 }
 
 #[derive(Clone)]
-pub struct AcceptedLanguage {
-    pub value: String,
-    pub quality: f32,
+struct AcceptedLanguage {
+    value: String,
+    quality: f32,
 }
 
 impl Eq for AcceptedLanguage {}
@@ -192,7 +191,7 @@ impl FromStr for AcceptedLanguage {
     }
 }
 
-pub struct Language(pub LanguageIdentifier);
+struct Language(pub LanguageIdentifier);
 
 #[async_trait]
 impl<S> FromRequestParts<S> for Language
@@ -209,7 +208,6 @@ where
 
         if let Some(lang_cookie) = cookie_jar.get(COOKIE_LANG) {
             for value_part in lang_cookie.value().split(',') {
-                tracing::debug!("lang cookie value part: {:?}", value_part);
                 if let Ok(value) = value_part.parse::<LanguageIdentifier>() {
                     for lang in &web_context.supported_languages {
                         if lang.matches(&value, true, false) {
@@ -236,7 +234,6 @@ where
 
         for accept_language in accept_languages {
             if let Ok(value) = accept_language.value.parse::<LanguageIdentifier>() {
-                tracing::debug!("accept language value part: {:?}", value);
                 for lang in &web_context.supported_languages {
                     if lang.matches(&value, true, false) {
                         return Ok(Self(lang.clone()));
@@ -251,13 +248,13 @@ where
 
 #[derive(Serialize)]
 struct Message {
-    pub style: String,
-    pub header: Option<String>,
-    pub content: String,
+    style: String,
+    header: Option<String>,
+    content: String,
 }
 
 impl Message {
-    pub fn danger(header: Option<&str>, content: &str) -> Self {
+    fn danger(header: Option<&str>, content: &str) -> Self {
         Self {
             style: "is-danger".to_string(),
             header: header.map(|s| s.to_string()),
@@ -265,7 +262,7 @@ impl Message {
         }
     }
 
-    pub fn success(header: Option<&str>, content: &str) -> Self {
+    fn success(header: Option<&str>, content: &str) -> Self {
         Self {
             style: "is-success".to_string(),
             header: header.map(|s| s.to_string()),
@@ -276,24 +273,18 @@ impl Message {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PlcService {
-    pub id: String,
-
-    #[serde(rename = "type")]
-    pub service_type: String,
-
-    pub service_endpoint: String,
+struct PlcService {
+    service_endpoint: String,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ResolveDid {
-    pub id: String,
-    pub also_known_as: Vec<String>,
-    pub service: Vec<PlcService>,
+struct ResolveDid {
+    also_known_as: Vec<String>,
+    service: Vec<PlcService>,
 }
 
-pub fn split_at_uri(uri: &str) -> Result<[&str; 3]> {
+fn split_at_uri(uri: &str) -> Result<[&str; 3]> {
     let stripped = uri.strip_prefix("at://");
     if stripped.is_none() {
         return Err(anyhow!("invalid URI"));
@@ -356,7 +347,7 @@ async fn pds_for_did(http_client: reqwest::Client, did: &str) -> Result<(String,
     Ok((service_endpoint, good_prefixes))
 }
 
-pub mod datetime_format {
+pub (crate) mod datetime_format {
     use chrono::{DateTime, SecondsFormat, Utc};
     use serde::{self, Deserialize, Deserializer, Serializer};
 
@@ -381,59 +372,59 @@ pub mod datetime_format {
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(tag = "$type")]
-pub enum ProofWrapper {
+enum ProofWrapper {
     #[serde(rename = "blue.badge.proof")]
     Proof(Proof),
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct Proof {
+struct Proof {
     #[serde(rename = "k")]
-    pub key: String,
+    key: String,
     #[serde(rename = "s")]
-    pub signature: String,
+    signature: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct BadgeRef {
-    pub uri: String,
+struct BadgeRef {
+    uri: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub cid: Option<String>,
+    cid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub name: Option<String>,
+    name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub description: Option<String>,
+    description: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(tag = "$type")]
-pub enum AwardWrapper {
+enum AwardWrapper {
     #[serde(rename = "blue.badge.award")]
     Award(Award),
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct Award {
-    pub did: String,
-    pub badge: BadgeRef,
+struct Award {
+    did: String,
+    badge: BadgeRef,
     #[serde(with = "datetime_format")]
-    pub issued: DateTime<Utc>,
+    issued: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub proof: Option<Proof>,
+    proof: Option<Proof>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(untagged)]
-pub enum RecordType {
+enum RecordType {
     Award(AwardWrapper),
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct GetRecordResponse {
-    pub uri: String,
-    pub cid: String,
+struct GetRecordResponse {
+    uri: String,
+    cid: String,
 
-    pub value: RecordType,
+    value: RecordType,
 }
 
 async fn handle_index(
@@ -450,10 +441,10 @@ async fn handle_index(
     .into_response())
 }
 
-pub type QueryParam<'a> = (&'a str, &'a str);
-pub type QueryParams<'a> = Vec<QueryParam<'a>>;
+type QueryParam<'a> = (&'a str, &'a str);
+type QueryParams<'a> = Vec<QueryParam<'a>>;
 
-pub fn stringify(query: QueryParams) -> String {
+fn stringify(query: QueryParams) -> String {
     query.iter().fold(String::new(), |acc, &tuple| {
         acc + tuple.0 + "=" + tuple.1 + "&"
     })
@@ -487,20 +478,22 @@ async fn get_record(
 }
 
 #[derive(Deserialize, Clone)]
-pub struct WrappedJsonWebKey {
+struct WrappedJsonWebKey {
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub kid: Option<String>,
+    kid: Option<String>,
 
+    // TODO: Verify the algorithm is supported.
+    #[allow(dead_code)]
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub alg: Option<String>,
+    alg: Option<String>,
 
     #[serde(flatten)]
-    pub jwk: JwkEcKey,
+    jwk: JwkEcKey,
 }
 
 #[derive(Deserialize, Clone)]
-pub struct WrappedJsonWebKeySet {
-    pub keys: Vec<WrappedJsonWebKey>,
+struct WrappedJsonWebKeySet {
+    keys: Vec<WrappedJsonWebKey>,
 }
 
 async fn public_key_for_jwk_uri(
@@ -544,7 +537,7 @@ async fn public_key_for_jwk_uri(
     p256::PublicKey::from_jwk(&found_key.jwk).map_err(|err| anyhow!("invalid JWK: {:?}", err))
 }
 
-pub fn verify_badge_signature(
+fn verify_badge_signature(
     key_id: &str,
     public_key: &p256::PublicKey,
     badge: &Award,
@@ -581,7 +574,7 @@ pub fn verify_badge_signature(
 }
 
 #[derive(Deserialize, Default)]
-pub struct VerifyRequest {
+struct VerifyRequest {
     pub uri: Option<String>,
 }
 
@@ -714,7 +707,7 @@ async fn handle_verify(
     .into_response())
 }
 
-pub fn face_text_size(face: &Face, text: &str, font_size: f32) -> (f32, f32) {
+fn face_text_size(face: &Face, text: &str, font_size: f32) -> (f32, f32) {
     let units_per_em = face.units_per_em() as f32;
     let scale_factor = font_size / units_per_em;
 
@@ -734,7 +727,7 @@ pub fn face_text_size(face: &Face, text: &str, font_size: f32) -> (f32, f32) {
     (width, height)
 }
 
-pub fn truncate(s: &str, max_chars: usize) -> &str {
+fn truncate(s: &str, max_chars: usize) -> &str {
     match s.char_indices().nth(max_chars) {
         None => s,
         Some((idx, _)) => &s[..idx],
@@ -1276,8 +1269,8 @@ async fn handle_render_award_png(
 }
 
 #[derive(Deserialize, Clone)]
-pub struct LanguageForm {
-    pub language: String,
+struct LanguageForm {
+    language: String,
 }
 
 async fn handle_set_language(
