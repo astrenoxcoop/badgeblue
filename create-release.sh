@@ -7,7 +7,7 @@ git checkout main
 git pull
 
 git-cliff --tag=${VERSION} --strip=header ${OLD_VERSION}.. > .tmp.release_info
-git-cliff -o --tag=${VERSION} --strip=header ${OLD_VERSION}..
+git-cliff -o --tag=${VERSION} --strip=header
 
 sed -i -e "s/^version = \"${OLD_VERSION}\"/version = \"${VERSION}\"/" Cargo.toml
 
