@@ -1,9 +1,23 @@
+## [0.2.4] - 2024-09-03
+
+### Changed
+
+- Cleaned up create-release.sh script to use image arg.
+- Updated development playbook to current scripts
+- Updated server setup playbook to include current caddy
+- Updating readme
+- Adding LICENSE
+- Updating Cargo.toml with current information
+- Removing old dist.sh file
+- Minor template cleanup
+
 ## [0.2.3] - 2024-09-02
 
 ### Changed
 
 - Fixed bug where i18n dir was not added to Dockerfile
 - Fixed bug where changelog was not generated with full history
+- 0.2.3
 
 ## [0.2.2] - 2024-09-02
 
@@ -84,6 +98,7 @@
 - Mvp
 - 0.1.0
 
+[0.2.4]: https://github.com/ngerakines/badgeblue/compare/0.2.3..0.2.4
 [0.2.3]: https://github.com/ngerakines/badgeblue/compare/0.2.2..0.2.3
 [0.2.2]: https://github.com/ngerakines/badgeblue/compare/0.2.1..0.2.2
 [0.2.1]: https://github.com/ngerakines/badgeblue/compare/0.2.0..0.2.1
