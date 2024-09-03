@@ -1,7 +1,8 @@
 #!/bin/sh
 
-OLD_VERSION=$1
-VERSION=$2
+IMAGE=$1
+OLD_VERSION=$2
+VERSION=$3
 
 git checkout main
 git pull
@@ -22,16 +23,16 @@ git tag -a "${VERSION}" -F .tmp.release_info
 git push
 git push --tags
 
-gh release create --verify-tag -F .tmp.release_info ${VERSION}
+gh release create --verify-tag -F .tmp.release_info -t "${VERSION}" ${VERSION}
 
 git pull
 
 git checkout ${VERSION}
 
-docker build --progress=plain -t "sjc.vultrcr.com/ngerakines/badgeblue:${VERSION}" .
+docker build --progress=plain -t "${IMAGE}:${VERSION}" .
 
-docker tag "sjc.vultrcr.com/ngerakines/badgeblue:${VERSION}" "sjc.vultrcr.com/ngerakines/badgeblue:latest"
-docker push "sjc.vultrcr.com/ngerakines/badgeblue:${VERSION}"
-docker push "sjc.vultrcr.com/ngerakines/badgeblue:latest"
+docker tag "${IMAGE}:${VERSION}" "${IMAGE}:latest"
+docker push "${IMAGE}:${VERSION}"
+docker push "${IMAGE}:latest"
 
 git checkout main
