@@ -2,6 +2,12 @@
 name = "badgeblue"
 version = "0.2.3"
 edition = "2021"
+description = "Define, Issue, and Verify Badges for ATProtocol Handles."
+authors = ["Nick Gerakines <nick.gerakines@gmail.com>"]
+readme = "README.md"
+repository = "https://github.com/ngerakines/badgeblue"
+homepage = "https://github.com/ngerakines/badgeblue"
+license = "MIT"
 
 [features]
 default = ["reload"]
