@@ -1,21 +1,17 @@
 # Development
 
-## Feature Development
+Guidelines:
 
-1. Deveop in branches created from issues.
+* Use conventional commits for everything. https://www.conventionalcommits.org/en/v1.0.0/
+* Use feature branches when possible, but main is fine too.
 
-2. Commit using https://www.conventionalcommits.org/en/v1.0.0/
+## Creating Releases
 
-3. Update the changelog with `git-cliff -o`
+1. Use the create-release.sh script to package the container.
 
-## Release Prep
+    $ ./create-release.sh sjc.vultrcr.com/ngerakines/badgeblue 0.2.2 0.2.3
 
-On main:
+2. Use the release.sh script to complete the release process server-side:
 
-1. Bump the version in `Cargo.toml`
+    $ ssh -v vultr 'sudo /var/lib/badgeblue/release.sh 0.2.3'
 
-2. Update the changelog with `git-cliff -o --bump`
-
-3. Commit the version and changelog changes.
-
-4. Create a GitHub release using that version.
